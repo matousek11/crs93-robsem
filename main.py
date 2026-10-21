@@ -6,7 +6,7 @@ ROBOTS = {"crs93": CRS93, "crs97": CRS97}
 
 
 class RobotShell(cmd.Cmd):
-    intro = "CRS robot CLI. Napiš 'help' pro seznam příkazů."
+    intro = "new intro"
     prompt = "crs> "
 
     def __init__(self):
