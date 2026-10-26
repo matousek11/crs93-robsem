@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy .
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: pytest
+        name: pytest
+        # Exit code 5 means no tests were collected, do not block commits until tests exist.
+        entry: bash -c 'uv run pytest --collect-only -q --no-cov >/dev/null; [ $? -eq 5 ] && exit 0; uv run pytest -q'
+        language: system
+        pass_filenames: false
+        always_run: true

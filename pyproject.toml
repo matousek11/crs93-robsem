@@ -1,0 +1,73 @@
+[project]
+name = "crs93-robsem"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "ctu-crs>=1.0.6",
+    "numpy>=2.5.3",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.12",
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.6",
+]
+
+[tool.pytest.ini_options]
+# tests/lab needs the real robot and is run manually.
+testpaths = ["tests/unit", "tests/integration"]
+# importlib allows test files with the same name in different folders.
+addopts = "--import-mode=importlib --cov --cov-branch --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["."]
+# Hardware layer is tested in the lab, not by unit tests.
+omit = ["main.py", "tests/*", ".venv/*"]
+
+[tool.coverage.report]
+fail_under = 90
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+# Robot and camera libraries ship without type information.
+[[tool.mypy.overrides]]
+module = ["ctu_crs.*", "ctu_mars_control_unit.*", "pypylon.*"]
+ignore_missing_imports = true
+
+# Google Python Style Guide: https://google.github.io/styleguide/pyguide.html
+[tool.ruff]
+line-length = 80
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "D",   # pydocstyle
+    "ANN", # type annotations
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "PL",  # pylint
+]
+
+# Google documents __init__ arguments in the class docstring.
+ignore = ["D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "ANN", "PLR2004"]

@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# uv
+.venv/
+
+# Tools
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
