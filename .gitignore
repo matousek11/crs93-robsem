@@ -13,6 +13,9 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Logs and recordings of runs
+runs/
+
 # IDE and OS
 .idea/
 .vscode/

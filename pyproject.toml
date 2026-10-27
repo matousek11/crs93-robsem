@@ -1,10 +1,11 @@
 [project]
-name = "crs93-robsem"
+name = "hoop-guide"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "ctu-crs>=1.0.6",
     "numpy>=2.5.3",
+    "rich>=15.0.0",
 ]
 
 [dependency-groups]
@@ -17,6 +18,14 @@ dev = [
     "ruff>=0.16.6",
 ]
 
+[build-system]
+requires = ["uv_build>=0.12.9,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "hoop_guide"
+module-root = ""
+
 [tool.pytest.ini_options]
 # tests/lab needs the real robot and is run manually.
 testpaths = ["tests/unit", "tests/integration"]
@@ -24,9 +33,9 @@ testpaths = ["tests/unit", "tests/integration"]
 addopts = "--import-mode=importlib --cov --cov-branch --cov-report=term-missing"
 
 [tool.coverage.run]
-source = ["."]
-# Hardware layer is tested in the lab, not by unit tests.
-omit = ["main.py", "tests/*", ".venv/*"]
+source = ["hoop_guide"]
+# Hardware and terminal layers are tested in the lab, not by unit tests.
+omit = ["hoop_guide/hardware/robot.py", "hoop_guide/ui.py"]
 
 [tool.coverage.report]
 fail_under = 90
@@ -34,6 +43,15 @@ fail_under = 90
 [tool.mypy]
 strict = true
 python_version = "3.12"
+# Module names follow folders, so tests/unit and tests/lab can share file names.
+explicit_package_bases = true
+
+# Test fakes and test functions do not need annotations.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
 
 # Robot and camera libraries ship without type information.
 [[tool.mypy.overrides]]

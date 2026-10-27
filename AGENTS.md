@@ -13,7 +13,13 @@ Project context is in `README.md`.
 Target layout. Create a folder or module only when there is code for it.
 
 ```
+main.py                  # entry point, only wires the modules together
 hoop_guide/              # main package
+├── app.py               # application flow: startup, menu, shutdown
+├── cli.py               # command line arguments
+├── ui.py                # terminal UI built on rich
+├── keyboard.py          # stop key c while a mode runs
+├── logs.py              # logging, one folder per run in runs/
 ├── types.py             # Pose, JointConfig, ImagePoint, Homography
 ├── geometry.py          # transforms, rotation about an axis
 ├── rods.py              # rod models, centerlines from the drawings
@@ -24,9 +30,8 @@ hoop_guide/              # main package
 ├── control.py           # tracking loop, step timing
 └── hardware/            # the only place that uses ctu_crs
     ├── interfaces.py    # Protocols for robot and camera
-    ├── crs.py           # thin wrapper over ctu_crs
+    ├── robot.py         # thin wrapper over ctu_crs, real or virtual robot
     └── fake.py          # fake robot and camera for tests and simulation
-scripts/                 # entry points, no logic (shell.py, calibrate.py, run.py)
 tests/
 ├── conftest.py          # shared fixtures (rod models, fake robot, sample poses)
 ├── unit/                # mirrors hoop_guide/ 1:1, one test file per module
@@ -42,14 +47,20 @@ config/                  # calibration and lab settings, committed
 ```
 
 - Start with flat modules, split one into a subpackage only when it grows.
-- `main.py` moves to `scripts/shell.py` once the package exists.
+- `app.py` uses the robot and the UI only through Protocols, so it is tested with fakes. `ui.py` and `hardware/robot.py` are excluded from coverage and checked in the lab.
+
+## Language
+
+Everything in the repository is in English: code, comments, docstrings, terminal output, logs, documentation and commit messages.
 
 ## Code quality
 
 - Follow the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html), enforced by `ruff` (config in `pyproject.toml`).
 - Type hints on all functions, Google style docstrings on public modules, classes and functions.
   - do not add unnecessary or duplicate doc blocks/comments
+  - add a comment only when the code itself cannot tell it. Together with the code it must be enough to understand what is going on, as short as possible but not shorter
 - Code is type checked by `mypy --strict`. Domain quantities have their own types (`typing.NewType`), never a bare `np.ndarray`, e.g. `Pose` (4x4 transform), `JointConfig` (6 joint angles), `ImagePoint`, `Homography`. Shape and frame are documented once at the type definition.
+- Boolean variables, attributes, arguments and properties start with `is_`, `has_`, `should_` or `can_`, e.g. `is_real`, `should_home`, never `real` or `home`. Ruff cannot check this, keep it in review.
 - Units in SI (meters, radians, seconds). Note the unit in the name or docstring where it is not obvious.
 - Do not overcomplicate things if there is better, easier and more readable solution to problem.
 
@@ -83,12 +94,14 @@ config/                  # calibration and lab settings, committed
 - Use fakes for hardware, avoid mocking internals of our own code.
 - When fixing a bug, first write a test that reproduces it.
 - Use `hypothesis` property-based tests for geometry and prediction, e.g. `fk(ik(pose)) == pose` or a full turn returns the original pose.
-- Branch coverage must stay at least 90 % (`main.py` and the hardware layer are excluded).
+- Branch coverage of `hoop_guide/` must stay at least 90 % (`ui.py` and `hardware/robot.py` are excluded).
 
 ## Planned (implementation tasks)
 
 - Safety layer before every `move_to_q`: joint limits, workspace bounds, maximum step between commands and hoop to rod distance from the model. On failure the robot stops and nothing is sent.
 - Run recording: images, estimates, sent commands and timestamps, so a run can be replayed offline and turned into a regression test.
+- Before `soft_home()` on exit, retract the hoop from the rod along the trajectory, otherwise the direct move home can hit the rod.
+- Verify in the lab whether the controller `STOP:` command can be used for an immediate stop on `c`.
 
 ## Before finishing a change
 

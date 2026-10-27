@@ -38,6 +38,7 @@ We assume the table rotates with constant but unknown speed. Angular velocity is
 5. **Occlusion.** When the arm shadows the ArUco marks, we rely on the prediction. Whenever at least one mark is visible, we refine the estimate.
 
 - Code requirements are in `AGENTS.md`.
+- How to run the application is in `MANUAL.md`.
 
 ## Testing
 
