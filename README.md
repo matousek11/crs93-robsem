@@ -12,6 +12,8 @@ Rod has 10 x 10 mm cross-section and hoop has inner diameter 60 mm, which gives 
 
 We assume the table rotates with constant but unknown speed. Angular velocity is the same for the whole table, but since the plate can be anywhere, the center of rotation is unknown and the linear speed of the rod depends on its distance from the center. We expect rather faster rotation.
 
+Camera gives 1920 x 1200 images at 10 fps (23 MB/s).
+
 <table>
   <tr>
     <td><img src="img/variant_a1_2026.jpg" alt="Variant A1"></td>

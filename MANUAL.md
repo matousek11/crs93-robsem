@@ -5,7 +5,7 @@ How to run the application and why it behaves the way it does.
 ## Running
 
 ```sh
-uv run main.py [--real] [--robot crs93|crs97] [--no-home]
+uv run main.py [--real] [--robot crs93|crs97] [--no-home] [--no-view]
 ```
 
 | Command | What it does | Why |
@@ -14,6 +14,15 @@ uv run main.py [--real] [--robot crs93|crs97] [--no-home]
 | `uv run main.py --real` | Connects to the real robot and shows a warning. | Connecting to the real robot must be an explicit decision. |
 | `uv run main.py --real --robot crs97` | Connects to the real CRS97. Default is `crs93`. | Both stations are in the lab and `ctu_crs` supports both. |
 | `uv run main.py --real --no-home` | Initializes the robot without hard and soft home. | Homing is only needed after the control unit was powered off. After an emergency stop or opening the cage it is not, so we save time and unnecessary motion. |
+| `uv run main.py --real --no-view` | Runs without the camera window. | The window needs a display, e.g. over SSH there is none. |
+
+## Camera window
+
+With the real robot a window with the live camera image opens at start. When the modes are implemented, the computed results (markers, plate frame, rod, prediction) will be drawn into it. The virtual robot has no camera, so there is no window.
+
+The window is display only. Keys pressed in it do nothing, all control stays in the terminal. Closing it does not stop the robot or the application, the window does not come back until the next start.
+
+If the camera fails, the image freezes and the error is in `app.log`, the robot is not affected.
 
 ## Startup
 
