@@ -2,6 +2,15 @@
 
 from typing import Protocol
 
+from hoop_guide.types import Image
+
+
+class Camera(Protocol):
+    """Source of camera images."""
+
+    def grab_image(self) -> Image:
+        """Returns the current image from the camera."""
+
 
 class RobotControl(Protocol):
     """Robot operations used by the application."""

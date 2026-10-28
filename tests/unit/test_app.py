@@ -78,7 +78,12 @@ def run_app(
     log: list[tuple[str, str]] = []
     robot = FakeRobot(log, is_real=is_real, failures=failures)
     ui = FakeUI(log, answers)
-    config = Config(is_real=is_real, robot="crs93", should_home=should_home)
+    config = Config(
+        is_real=is_real,
+        robot="crs93",
+        should_home=should_home,
+        should_show_view=False,
+    )
     App(config, robot, ui, tmp_path).run()
     return log, robot
 

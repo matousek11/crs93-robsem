@@ -1,15 +1,18 @@
 """Entry point of the application, see MANUAL.md."""
 
+import contextlib
 import logging
 import sys
 
 from hoop_guide.app import App
+from hoop_guide.camera_stream import CameraStream
 from hoop_guide.cli import parse_args
 from hoop_guide.hardware.robot import Robot
 from hoop_guide.logs import LOG_FILE_NAME
 from hoop_guide.logs import setup_logging
 from hoop_guide.ui import RichUI
-# comment
+from hoop_guide.viewer.window import Viewer
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +35,11 @@ def main() -> int:
             f" Details in {run_dir / LOG_FILE_NAME}."
         )
         return 1
-    App(config, robot, ui, run_dir).run()
+    with contextlib.ExitStack() as stack:
+        if config.should_show_view and robot.is_real:
+            viewer = stack.enter_context(Viewer())
+            stack.enter_context(CameraStream(robot, viewer.show))
+        App(config, robot, ui, run_dir).run()
     return 0
 
 

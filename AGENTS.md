@@ -5,7 +5,8 @@ Project context is in `README.md`.
 ## Stack
 
 - Python 3.12, dependencies managed by `uv` only (`uv add`, `uv run`), never `pip`.
-- `numpy` for math, `ctu_crs` for the robot (`CRS93`) and the camera.
+- `numpy` for math, `ctu_crs` for the robot (`CRS93`) and the camera, `rich` for the terminal UI.
+- `opencv-python` for vision and the camera window.
 - Do not add new dependencies without asking.
 
 ## Project structure
@@ -20,14 +21,19 @@ hoop_guide/              # main package
 ├── ui.py                # terminal UI built on rich
 ├── keyboard.py          # stop key c while a mode runs
 ├── logs.py              # logging, one folder per run in runs/
-├── types.py             # Pose, JointConfig, ImagePoint, Homography
+├── types.py             # shared NewTypes: Image, PixelPoints, Points3D, Homography, Pose, ...
 ├── geometry.py          # transforms, rotation about an axis
+├── vision.py            # ArUco detection, image to table plane mapping
+├── plate.py             # plate frame, plate pose from markers
 ├── rods.py              # rod models, centerlines from the drawings
-├── vision.py            # ArUco detection, homography
 ├── calibration.py       # calibration from point pairs
 ├── estimation.py        # center of rotation, ω, phase, pose prediction
 ├── planning.py          # hoop path along the rod, handle orientation
 ├── control.py           # tracking loop, step timing
+├── camera_stream.py     # background thread that keeps the latest camera image
+├── viewer/              # camera window, runs in a separate process
+│   ├── window.py        # viewer process, latest frame queue, cv2.imshow loop
+│   └── overlay.py       # draws markers, plate frame, rod and prediction into the image
 └── hardware/            # the only place that uses ctu_crs
     ├── interfaces.py    # Protocols for robot and camera
     ├── robot.py         # thin wrapper over ctu_crs, real or virtual robot
@@ -47,7 +53,8 @@ config/                  # calibration and lab settings, committed
 ```
 
 - Start with flat modules, split one into a subpackage only when it grows.
-- `app.py` uses the robot and the UI only through Protocols, so it is tested with fakes. `ui.py` and `hardware/robot.py` are excluded from coverage and checked in the lab.
+- `app.py` uses the robot and the UI only through Protocols, so it is tested with fakes. `ui.py`, `viewer/window.py` and `hardware/robot.py` are excluded from coverage and checked in the lab.
+- The camera window runs in its own process, because an OpenCV window needs the main thread, which belongs to the menu and Ctrl+C. Only the latest image waits for it, so the control loop never waits for the window. Computed results are drawn by pure functions in `viewer/overlay.py`.
 
 ## Language
 
@@ -94,14 +101,20 @@ Everything in the repository is in English: code, comments, docstrings, terminal
 - Use fakes for hardware, avoid mocking internals of our own code.
 - When fixing a bug, first write a test that reproduces it.
 - Use `hypothesis` property-based tests for geometry and prediction, e.g. `fk(ik(pose)) == pose` or a full turn returns the original pose.
-- Branch coverage of `hoop_guide/` must stay at least 90 % (`ui.py` and `hardware/robot.py` are excluded).
+- Branch coverage of `hoop_guide/` must stay at least 90 % (`ui.py`, `viewer/window.py` and `hardware/robot.py` are excluded).
 
 ## Planned (implementation tasks)
 
 - Safety layer before every `move_to_q`: joint limits, workspace bounds, maximum step between commands and hoop to rod distance from the model. On failure the robot stops and nothing is sent.
 - Run recording: images, estimates, sent commands and timestamps, so a run can be replayed offline and turned into a regression test.
 - Before `soft_home()` on exit, retract the hoop from the rod along the trajectory, otherwise the direct move home can hit the rod.
+- Camera window for the virtual robot, e.g. replaying recorded runs.
+- Verify in the lab that `grab_image()` from `ctu_crs` reaches the camera's 10 fps, it starts and stops grabbing on every call.
 - Verify in the lab whether the controller `STOP:` command can be used for an immediate stop on `c`.
+- Verify the ArUco marker IDs and their corners on the plate (`MARKER_CENTERS` in `plate.py`).
+- Decide how to get the plate height, the plate lies on a sponge, so it is not constant.
+- Confirm which drawing in ROB1-2025-hw belongs to each puzzle variant A1 to D.
+- Interface stubs raise `NotImplementedError`. When implementing one, remove its module from `omit` in `[tool.coverage.run]`.
 
 ## Before finishing a change
 

@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "ctu-crs>=1.0.6",
     "numpy>=2.5.3",
+    "opencv-python>=5.0.0.93",
     "rich>=15.0.0",
 ]
 
@@ -35,10 +36,18 @@ addopts = "--import-mode=importlib --cov --cov-branch --cov-report=term-missing"
 [tool.coverage.run]
 source = ["hoop_guide"]
 # Hardware and terminal layers are tested in the lab, not by unit tests.
-omit = ["hoop_guide/hardware/robot.py", "hoop_guide/ui.py"]
+omit = [
+    "hoop_guide/hardware/robot.py",
+    "hoop_guide/ui.py",
+    "hoop_guide/viewer/window.py",
+    # Interface stubs only, remove from here together with the implementation.
+    "hoop_guide/rods.py",
+]
 
 [tool.coverage.report]
 fail_under = 90
+# Interface stubs are not implemented yet.
+exclude_also = ["raise NotImplementedError"]
 
 [tool.mypy]
 strict = true

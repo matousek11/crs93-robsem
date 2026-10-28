@@ -3,6 +3,8 @@
 from ctu_crs import CRS93
 from ctu_crs import CRS97
 
+from hoop_guide.types import Image
+
 ROBOT_CLASSES = {"crs93": CRS93, "crs97": CRS97}
 
 
@@ -59,6 +61,19 @@ class Robot:
         """Resets motors in an error state."""
         self._require_real()
         self._crs.reset_motors()
+
+    def grab_image(self) -> Image:
+        """Returns the current image from the station camera.
+
+        ctu_crs connects to the camera on the first call. Raises
+        VirtualRobotError for the virtual robot and RuntimeError when the
+        camera returns no image.
+        """
+        self._require_real()
+        image = self._crs.grab_image()
+        if image is None:
+            raise RuntimeError("Camera returned no image.")
+        return Image(image)
 
     def shutdown(self) -> None:
         """Moves the robot home if initialized and closes the connection.
