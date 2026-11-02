@@ -26,3 +26,6 @@ Directions3D = NewType("Directions3D", NDArray[np.float64])
 
 Homography = NewType("Homography", NDArray[np.float64])
 """Maps image points to the table plane in the robot frame, shape (3, 3)."""
+
+Pose = NewType("Pose", NDArray[np.float64])
+"""Rigid transform, shape (4, 4): local coordinates to parent frame."""

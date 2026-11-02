@@ -11,6 +11,8 @@ from pathlib import Path
 from hoop_guide.cli import Config
 from hoop_guide.hardware.interfaces import RobotControl
 from hoop_guide.logs import LOG_FILE_NAME
+from hoop_guide.rods import model_for_puzzle
+from hoop_guide.rods import Puzzle
 from hoop_guide.ui import MenuOption
 from hoop_guide.ui import Status
 from hoop_guide.ui import UserInterface
@@ -20,6 +22,7 @@ logger = logging.getLogger(__name__)
 PUZZLE_MODES = ("A1", "A2", "B", "C", "D")
 QUIT_KEY = "0"
 NO_MODE = "None"
+PREVIEW_STEP = 0.020  # Sampling step [m], geometry preview only.
 
 
 @contextlib.contextmanager
@@ -120,7 +123,12 @@ class App:
             action()
 
     def _run_mode(self, mode: str) -> None:
-        self._warning(f"Mode {mode} is not implemented yet.")
+        model = model_for_puzzle(Puzzle(mode))
+        points, _ = model.sample(PREVIEW_STEP)
+        self._info(
+            f"Mode {mode}: rod geometry ready ({len(points)} points in plate "
+            "coordinates). Preview only; robot motion is not implemented."
+        )
 
     def _soft_home(self) -> None:
         self._hardware_action("Soft home", self._robot.soft_home)

@@ -42,7 +42,7 @@ Every run creates a folder `runs/<date_time>/` with `app.log`. Everything the ap
 
 | Option | What it does | Why |
 |---|---|---|
-| A1, A2, B, C, D | Runs the puzzle mode. Not implemented yet. | One mode per puzzle variant, from the easiest to the hardest. |
+| A1, A2, B, C, D | Prints a safe preview of the CAD-derived rod centerline (sample count in plate coordinates). It does not command motion or open a 3D plot. | Check the geometry model and menu wiring offline before implementing motion planning. |
 | Soft home | Moves the robot to the home position. | Return to a known position, e.g. after stopping a mode. |
 | Release | Engages the brakes and disconnects feedback. Wait until the robot stops and do not use it above the work surface, the arm can slightly drop. | Required before entering the safety cage. |
 | Reset motors | Resets motors in an error state. | Recovery after a motor error (flashing green and red LED). |

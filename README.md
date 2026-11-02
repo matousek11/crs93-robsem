@@ -1,10 +1,10 @@
 # CRS93 robotic semester project
 
-Semester project from robotics, our goal is to write software that is going to guide 6DoF CRS93 robotic arm with a hoop through 5 different rotating bent rods (puzzles A-E) without touching the rod.
+Semester project from robotics: guide a 6DoF CRS93 robotic arm with a hoop through five project variants (A1, A2, B, C, D) without touching the rod. Hardware CAD source models are labeled A-E; A1 and A2 use the same A rod.
 
 ## Problem specification
 
-Specification of rods can be found in this [repository](https://github.com/pilcsimo/ROB1-2025-hw). We are going to start from the easiest case (A) and end up with the hardest one (E).
+Specification of rods can be found in this [repository](https://github.com/pilcsimo/ROB1-2025-hw). We start with the straight A rod (project variants A1 and A2), then continue through B, C and D.
 
 Square plate (125 x 125 mm) with the rod is placed anywhere on the rotary table. Plate is marked with two ArUco marks placed on its opposite corners. Rod is mounted in the center of the plate, so its pose is fixed relative to the ArUco marks.
 
@@ -66,3 +66,51 @@ All checks also run automatically before every commit and the commit is rejected
 - How fast does the table actually rotate?
 - How long does one short `move_to_q` take?
 - What does the controller do when `move_to_q` is sent while the robot is still moving?
+## Implemented geometry (offline only)
+
+- `hoop_guide.rods` implements the centerlines for project variants A1, A2,
+  B, C and D. Models are assembled from `LineSegment` and `ArcSegment`, both
+  implementing the small `RodSegment` interface. `RodModel.sample(step)`
+  produces points and unit tangents in the **local plate frame**, in order
+  from the free end toward the plate.
+- Geometry was checked against `ROB1-2025-hw-main/puzzles/A.step` through
+  `D.step` and the corresponding pages 1-4 of `drawings/puzzles.pdf`.
+  The hardware repository also contains puzzle E, which is not a separate
+  variant in our current A1/A2/B/C/D menu.
+- CAD reference waypoints (x, y, z) below are in **millimeters**, in the
+  source puzzle CAD coordinate axes. The program stores them in meters.
+
+| Variant | CAD centerline from free end toward base (mm) |
+|---|---|
+| A1 / A2 | (0,0,200) → (0,0,40) |
+| B | (70,0,200) → (70,0,150) → (0,0,80) → (0,0,40) |
+| C | (-50,-50,200) → (-50,-50,150) → (-50,0,100) → (0,0,50) → (0,0,40) |
+| D | (85,0,155) → (35,0,155) → **R50 circular quarter arc**, center (35,0,105), to (-15,0,105) → (-15,0,45) → (-10,0,40) |
+
+- `rod_centerline(puzzle, plate, plate_height, step)` transforms the sampled
+  centerline and tangents to the **robot frame** for a given horizontal-plate
+  pose, using `plate_to_robot`. The external motion estimation must supply the
+  predicted pose of a rotating plate at the relevant time.
+- `hoop_guide.geometry.hoop_cad_to_center()` provides the center of the ring
+  hole in the **Hoop.step CAD frame**: (0, -135, -3.3) mm. The center-frame
+  axes follow the Hoop.step axes; its local Z is normal to the ring plane.
+- `AdapterMount` combines two explicitly supplied, calibrated rigid poses:
+  flange → adapter and adapter → Hoop.step CAD frame. It then includes the
+  known ring-center offset. `flange_for_hoop()` computes the pose to supply
+  to IK. **No mounting calibration or actual robot tool frame is assumed.**
+- Selecting any variant A1/A2/B/C/D in the menu prints the number of
+  sampled points. It is a text-only preview and sends no movement commands.
+- To check geometry and mounting mathematics independently:
+
+```sh
+uv run pytest tests/unit/test_rods.py tests/unit/test_geometry.py --no-cov -v
+```
+
+**Before physical execution:** verify the origin and yaw of each mounted
+puzzle relative to the upper plate surface, the measured plate height,
+`ctu_crs` FK/IK tool frame, the assembly and calibration of the adapter,
+collision clearance (especially at sharp corners and the D bend), safe
+approach/retraction, and joint limits. `STOP_HEIGHT = 0.040 m` is a nominal
+**hoop center height**, not proof of passing below the 40 mm finish criterion.
+The code contains **no collision avoidance, orientation planner, IK motion
+planning, tracking or real-robot movement for puzzle modes** yet.

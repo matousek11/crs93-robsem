@@ -1,0 +1,811 @@
+diff --git a/MANUAL.md b/MANUAL.md
+index 0038a1f..e3f2c6f 100644
+--- a/MANUAL.md
++++ b/MANUAL.md
+@@ -42,7 +42,8 @@ Every run creates a folder `runs/<date_time>/` with `app.log`. Everything the ap
+ 
+ | Option | What it does | Why |
+ |---|---|---|
+-| A1, A2, B, C, D | Runs the puzzle mode. Not implemented yet. | One mode per puzzle variant, from the easiest to the hardest. |
++| A1, A2 | Shows a safe preview of the straight rod centerline in plate coordinates. It does not send any movement command. | Verify the selected geometry before motion planning is connected. |
++| B, C, D | Reports that the rod model is not yet implemented. | CAD geometry must be verified before enabling a variant. |
+ | Soft home | Moves the robot to the home position. | Return to a known position, e.g. after stopping a mode. |
+ | Release | Engages the brakes and disconnects feedback. Wait until the robot stops and do not use it above the work surface, the arm can slightly drop. | Required before entering the safety cage. |
+ | Reset motors | Resets motors in an error state. | Recovery after a motor error (flashing green and red LED). |
+diff --git a/README.md b/README.md
+index a7b007c..5558efd 100644
+--- a/README.md
++++ b/README.md
+@@ -65,4 +65,24 @@ All checks also run automatically before every commit and the commit is rejected
+ 
+ - How fast does the table actually rotate?
+ - How long does one short `move_to_q` take?
+-- What does the controller do when `move_to_q` is sent while the robot is still moving?
+\ No newline at end of file
++- What does the controller do when `move_to_q` is sent while the robot is still moving?
++## Implemented geometry (offline only)
++
++- `hoop_guide.rods` defines straight and circular-arc centerline segments, a
++  composable `RodModel`, and the first model for A1/A2. The two variants
++  have the same nominal 200 mm straight rod; their motion differs.
++- `rod_centerline(puzzle, plate, plate_height, step)` returns sampled hoop
++  center points and unit tangents in the robot frame. It never commands
++  the robot. The path currently ends at `STOP_HEIGHT = 0.040 m`.
++- `hoop_guide.geometry` defines plate-to-robot transformations and a generic
++  flange-to-hoop adapter transform. The real adapter dimensions and mounting
++  orientation are NOT calibrated, so no real robot trajectory is provided.
++- Selecting A1 or A2 in the existing menu prints geometry preview status.
++  B, C, and D remain unavailable pending verification against CAD drawings.
++- Run `uv run pytest tests/unit/test_rods.py tests/unit/test_geometry.py`
++  to test these modules without a connected robot.
++
++**Before physical execution:** confirm the height of the mounted A rod
++relative to the plate top, the adapter transform and end-effector frame,
++plate height, clearance, safe approach/retraction, and robot IK/joint limits.
++No collision avoidance, time synchronization, or tracking is implemented yet.
+diff --git a/hoop_guide/app.py b/hoop_guide/app.py
+index 4efef32..9ff3dbf 100644
+--- a/hoop_guide/app.py
++++ b/hoop_guide/app.py
+@@ -11,6 +11,8 @@ from pathlib import Path
+ from hoop_guide.cli import Config
+ from hoop_guide.hardware.interfaces import RobotControl
+ from hoop_guide.logs import LOG_FILE_NAME
++from hoop_guide.rods import model_for_puzzle
++from hoop_guide.rods import Puzzle
+ from hoop_guide.ui import MenuOption
+ from hoop_guide.ui import Status
+ from hoop_guide.ui import UserInterface
+@@ -20,6 +22,7 @@ logger = logging.getLogger(__name__)
+ PUZZLE_MODES = ("A1", "A2", "B", "C", "D")
+ QUIT_KEY = "0"
+ NO_MODE = "None"
++PREVIEW_STEP = 0.020  # Sampling step [m], geometry preview only.
+ 
+ 
+ @contextlib.contextmanager
+@@ -120,7 +123,16 @@ class App:
+             action()
+ 
+     def _run_mode(self, mode: str) -> None:
+-        self._warning(f"Mode {mode} is not implemented yet.")
++        try:
++            model = model_for_puzzle(Puzzle(mode))
++        except NotImplementedError:
++            self._warning(f"Mode {mode} is not implemented yet.")
++            return
++        points, _ = model.sample(PREVIEW_STEP)
++        self._info(
++            f"Mode {mode}: rod geometry ready ({len(points)} points in plate "
++            "coordinates). Preview only; robot motion is not implemented."
++        )
+ 
+     def _soft_home(self) -> None:
+         self._hardware_action("Soft home", self._robot.soft_home)
+diff --git a/hoop_guide/geometry.py b/hoop_guide/geometry.py
+new file mode 100644
+index 0000000..259956f
+--- /dev/null
++++ b/hoop_guide/geometry.py
+@@ -0,0 +1,114 @@
++"""Rigid transforms used for the plate, hoop, and robot flange.
++
++Pose matrices map homogeneous coordinates from a local frame to a parent
++frame. Distances are in meters, angles in radians.
++"""
++
++import math
++
++import numpy as np
++
++from hoop_guide.plate import PlatePose
++from hoop_guide.types import Directions3D
++from hoop_guide.types import Points3D
++from hoop_guide.types import Pose
++
++
++def plate_to_robot(plate: PlatePose, plate_height: float) -> Pose:
++    """Returns the plate-to-robot transform for a horizontal plate.
++
++    The plate origin is at the center of its top face, with the local z
++    axis pointing upward. Only a rotation about the robot z axis is allowed.
++
++    Args:
++        plate: Position (x, y) and orientation (theta) of the plate.
++        plate_height: Height of the plate top above robot frame origin [m].
++
++    Returns:
++        The 4x4 plate-to-robot pose.
++
++    Raises:
++        ValueError: If a pose parameter is non-finite.
++    """
++    if not all(
++        math.isfinite(value)
++        for value in (plate.x, plate.y, plate.theta, plate_height)
++    ):
++        raise ValueError("Plate pose and height must be finite.")
++    cosine = math.cos(plate.theta)
++    sine = math.sin(plate.theta)
++    return Pose(
++        np.array(
++            [
++                [cosine, -sine, 0.0, plate.x],
++                [sine, cosine, 0.0, plate.y],
++                [0.0, 0.0, 1.0, plate_height],
++                [0.0, 0.0, 0.0, 1.0],
++            ],
++            dtype=np.float64,
++        )
++    )
++
++
++def _checked_pose(transform: Pose) -> np.ndarray:
++    """Checks that a pose is a proper rigid 4x4 transformation."""
++    matrix = np.asarray(transform, dtype=np.float64)
++    if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
++        raise ValueError("Pose must be a finite 4x4 matrix.")
++    if not np.allclose(matrix[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9):
++        raise ValueError("Pose must have homogeneous last row [0, 0, 0, 1].")
++    rotation = matrix[:3, :3]
++    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-8):
++        raise ValueError("Pose rotation must be orthonormal.")
++    if not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-8):
++        raise ValueError("Pose rotation must have determinant +1.")
++    return matrix
++
++
++def transform_points(points: Points3D, transform: Pose) -> Points3D:
++    """Transforms Nx3 points using rotation and translation of a pose."""
++    matrix = _checked_pose(transform)
++    data = np.asarray(points, dtype=np.float64)
++    if data.ndim != 2 or data.shape[1] != 3 or not np.isfinite(data).all():
++        raise ValueError("Points must be a finite array with shape (N, 3).")
++    return Points3D(data @ matrix[:3, :3].T + matrix[:3, 3])
++
++
++def transform_directions(
++    directions: Directions3D, transform: Pose
++) -> Directions3D:
++    """Rotates Nx3 unit directions; translation does not affect them."""
++    matrix = _checked_pose(transform)
++    data = np.asarray(directions, dtype=np.float64)
++    if data.ndim != 2 or data.shape[1] != 3 or not np.isfinite(data).all():
++        raise ValueError("Directions must have finite shape (N, 3).")
++    if not np.allclose(np.linalg.norm(data, axis=1), 1.0, atol=1e-8):
++        raise ValueError("Directions must be unit vectors.")
++    return Directions3D(data @ matrix[:3, :3].T)
++
++
++def inverse_pose(transform: Pose) -> Pose:
++    """Returns the inverse of a rigid transform without a general inverse."""
++    matrix = _checked_pose(transform)
++    rotation_transpose = matrix[:3, :3].T
++    inverse = np.eye(4, dtype=np.float64)
++    inverse[:3, :3] = rotation_transpose
++    inverse[:3, 3] = -rotation_transpose @ matrix[:3, 3]
++    return Pose(inverse)
++
++
++def flange_pose_for_hoop(hoop_in_robot: Pose, hoop_in_flange: Pose) -> Pose:
++    """Returns robot-frame flange pose needed for a desired hoop pose.
++
++    Args:
++        hoop_in_robot: Desired pose of hoop-center frame in robot frame.
++        hoop_in_flange: Fixed transform from robot flange to hoop-center
++            frame, including the adapter. It must be measured from the real
++            assembled tool before using the result on physical hardware.
++
++    Returns:
++        Required flange pose in robot frame, for use with robot IK.
++    """
++    robot_hoop = _checked_pose(hoop_in_robot)
++    flange_hoop_inverse = inverse_pose(hoop_in_flange)
++    return Pose(robot_hoop @ flange_hoop_inverse)
+diff --git a/hoop_guide/rods.py b/hoop_guide/rods.py
+index 0f07239..e9b422e 100644
+--- a/hoop_guide/rods.py
++++ b/hoop_guide/rods.py
+@@ -1,17 +1,34 @@
+-"""Rod models of the puzzles and sampling of their centerlines.
++"""Rod centerline models, in the coordinate frame of the base plate.
+ 
+-Rods are modelled in the plate frame (see plate.py) as a chain of straight
+-and arc segments of the centerline, taken from the drawings in ROB1-2025-hw.
++A model consists of straight and circular-arc segments ordered from the
++free tip toward the plate. The model and its unit tangents can be sampled
++without a connected robot or camera.
+ """
+ 
++import dataclasses
+ import enum
++import math
++from typing import Protocol
+ 
++import numpy as np
++from numpy.typing import NDArray
++
++from hoop_guide.geometry import plate_to_robot
++from hoop_guide.geometry import transform_directions
++from hoop_guide.geometry import transform_points
+ from hoop_guide.plate import PlatePose
+ from hoop_guide.types import Directions3D
+ from hoop_guide.types import Points3D
+ 
+ STOP_HEIGHT = 0.040
+-"""Height above the plate where the hoop center stops [m]."""
++"""Height of the hoop center above the plate at the end of the path [m]."""
++
++ROD_A_NOMINAL_HEIGHT = 0.200
++"""Nominal A-rod tip height [m], from the ROB1-2025-hw drawing.
++
++The drawing dimensions the rod from its mounting foot. Verify the actual
++height relative to the plate top with the assembled part before a real run.
++"""
+ 
+ 
+ class Puzzle(enum.Enum):
+@@ -24,24 +41,205 @@ class Puzzle(enum.Enum):
+     D = "D"
+ 
+ 
++class RodSegment(Protocol):
++    """Continuous centerline segment parameterized by travel distance."""
++
++    @property
++    def length(self) -> float:
++        """Length of the segment [m]."""
++
++    def point_at(self, distance: float) -> NDArray[np.float64]:
++        """Returns a 3D centerline point at a distance from segment start."""
++
++    def tangent_at(self, distance: float) -> NDArray[np.float64]:
++        """Returns a unit vector in the direction of travel."""
++
++
++@dataclasses.dataclass(frozen=True)
++class LineSegment:
++    """Straight rod centerline segment between two plate-frame points."""
++
++    start: tuple[float, float, float]
++    end: tuple[float, float, float]
++
++    def __post_init__(self) -> None:
++        if not np.isfinite([*self.start, *self.end]).all() or self.length == 0:
++            raise ValueError("Line segment needs distinct finite endpoints.")
++
++    @property
++    def length(self) -> float:
++        """Length in meters."""
++        return float(np.linalg.norm(np.subtract(self.end, self.start)))
++
++    def point_at(self, distance: float) -> NDArray[np.float64]:
++        """Returns the interpolated point at the given distance in meters."""
++        _check_distance(distance, self.length)
++        start = np.asarray(self.start, dtype=np.float64)
++        return start + distance * self.tangent_at(distance)
++
++    def tangent_at(self, distance: float) -> NDArray[np.float64]:
++        """Returns the unit tangent from start to end."""
++        _check_distance(distance, self.length)
++        return np.subtract(self.end, self.start) / self.length
++
++
++@dataclasses.dataclass(frozen=True)
++class ArcSegment:
++    """Circular 3D arc specified by center, radial start, axis and sweep.
++
++    Axis is a unit vector perpendicular to the start radius. A positive
++    sweep follows the right-hand rule around this axis.
++    """
++
++    center: tuple[float, float, float]
++    start_radius: tuple[float, float, float]
++    axis: tuple[float, float, float]
++    sweep: float
++
++    def __post_init__(self) -> None:
++        if not np.isfinite(
++            [*self.center, *self.start_radius, *self.axis, self.sweep]
++        ).all():
++            raise ValueError("Arc parameters must be finite.")
++        if self.radius == 0 or self.sweep == 0:
++            raise ValueError("Arc radius and sweep must be nonzero.")
++        if not np.isclose(np.linalg.norm(self.axis), 1.0, atol=1e-8):
++            raise ValueError("Arc axis must have unit length.")
++        if not np.isclose(
++            np.dot(self.axis, self.start_radius), 0.0, atol=1e-8
++        ):
++            raise ValueError("Arc axis must be perpendicular to radius.")
++
++    @property
++    def radius(self) -> float:
++        """Arc radius [m]."""
++        return float(np.linalg.norm(self.start_radius))
++
++    @property
++    def length(self) -> float:
++        """Arc length [m]."""
++        return self.radius * abs(self.sweep)
++
++    def _radial_at(self, distance: float) -> NDArray[np.float64]:
++        _check_distance(distance, self.length)
++        angle = distance / self.radius * math.copysign(1.0, self.sweep)
++        radial = np.asarray(self.start_radius, dtype=np.float64)
++        axis = np.asarray(self.axis, dtype=np.float64)
++        return (
++            radial * math.cos(angle)
++            + np.cross(axis, radial) * math.sin(angle)
++        )
++
++    def point_at(self, distance: float) -> NDArray[np.float64]:
++        """Returns a point on the circular arc."""
++        center = np.asarray(self.center, dtype=np.float64)
++        return center + self._radial_at(distance)
++
++    def tangent_at(self, distance: float) -> NDArray[np.float64]:
++        """Returns unit tangent in the direction of the arc sweep."""
++        axis = np.asarray(self.axis, dtype=np.float64)
++        tangent = np.cross(axis, self._radial_at(distance)) / self.radius
++        return tangent * math.copysign(1.0, self.sweep)
++
++
++def _check_distance(distance: float, length: float) -> None:
++    if not math.isfinite(distance) or not 0.0 <= distance <= length:
++        raise ValueError("Distance must be finite and within segment length.")
++
++
++@dataclasses.dataclass(frozen=True)
++class RodModel:
++    """Rod path as contiguous segments, from its free tip to the stop point.
++
++    The path starts at the free end. At a sharp corner, the tangent in the
++    sampled result is that of the incoming segment; an instantaneous change
++    of hoop orientation is not safe and must be handled by the planner.
++    """
++
++    segments: tuple[RodSegment, ...]
++
++    def __post_init__(self) -> None:
++        if not self.segments:
++            raise ValueError("Rod model needs at least one segment.")
++        for previous, following in zip(self.segments, self.segments[1:]):
++            if not np.allclose(
++                previous.point_at(previous.length), following.point_at(0.0),
++                atol=1e-9, rtol=0.0,
++            ):
++                raise ValueError("Adjacent rod segments must be continuous.")
++
++    def sample(self, step: float) -> tuple[Points3D, Directions3D]:
++        """Samples each segment with spacing no larger than step [m].
++
++        Both endpoints and all segment boundaries are included only once.
++        """
++        if not math.isfinite(step) or step <= 0:
++            raise ValueError("Sampling step must be finite and positive.")
++        point_parts: list[NDArray[np.float64]] = []
++        direction_parts: list[NDArray[np.float64]] = []
++        for index, segment in enumerate(self.segments):
++            distances = np.linspace(
++                0.0, segment.length, math.ceil(segment.length / step) + 1
++            )
++            if index:
++                distances = distances[1:]
++            point_parts.append(
++                np.stack([segment.point_at(d) for d in distances])
++            )
++            direction_parts.append(
++                np.stack([segment.tangent_at(d) for d in distances])
++            )
++        return (
++            Points3D(np.concatenate(point_parts)),
++            Directions3D(np.concatenate(direction_parts)),
++        )
++
++
++def model_for_puzzle(puzzle: Puzzle) -> RodModel:
++    """Returns a plate-frame rod path model for an implemented puzzle.
++
++    A1 (stationary) and A2 (rotating) use the same straight rod geometry.
++    The rotating pose of A2 is supplied externally through PlatePose.
++
++    Raises:
++        NotImplementedError: If the CAD geometry of the selected puzzle
++            has not yet been encoded and verified.
++    """
++    if puzzle in (Puzzle.A1, Puzzle.A2):
++        return RodModel(
++            (
++                LineSegment(
++                    (0.0, 0.0, ROD_A_NOMINAL_HEIGHT),
++                    (0.0, 0.0, STOP_HEIGHT),
++                ),
++            )
++        )
++    raise NotImplementedError(
++        f"Rod geometry for puzzle {puzzle.value} is not implemented yet."
++    )
++
++
+ def rod_centerline(
+     puzzle: Puzzle, plate: PlatePose, plate_height: float, step: float
+ ) -> tuple[Points3D, Directions3D]:
+     """Samples the rod centerline in the robot frame.
+ 
+-    The points go from the free end of the rod down to STOP_HEIGHT above the
+-    plate, so they are the path of the hoop center.
++    The points go from the free end of the rod to STOP_HEIGHT above the
++    plate, and represent the nominal path of the hoop center. This is only
++    centerline geometry, not a collision-checked robot trajectory.
+ 
+     Args:
+         puzzle: Which rod.
+-        plate: Pose of the plate.
+-        plate_height: Height of the plate top surface above the robot base
+-            [m].
+-        step: Distance between neighbouring points along the rod [m].
++        plate: Pose of the plate relative to the robot.
++        plate_height: Height of plate top above the robot origin [m].
++        step: Maximum arc-length spacing of sampled points [m].
+ 
+     Returns:
+-        Points, shape (N, 3), and unit tangents in them, shape (N, 3), both in
+-        the robot frame. Tangents point along the path, from the free end
+-        down.
++        Points and unit tangents, each shape (N, 3), in the robot frame.
+     """
+-    raise NotImplementedError
++    plate_points, plate_tangents = model_for_puzzle(puzzle).sample(step)
++    transform = plate_to_robot(plate, plate_height)
++    return (
++        transform_points(plate_points, transform),
++        transform_directions(plate_tangents, transform),
++    )
+diff --git a/hoop_guide/types.py b/hoop_guide/types.py
+index 4c08eb4..aa0f613 100644
+--- a/hoop_guide/types.py
++++ b/hoop_guide/types.py
+@@ -26,3 +26,6 @@ Directions3D = NewType("Directions3D", NDArray[np.float64])
+ 
+ Homography = NewType("Homography", NDArray[np.float64])
+ """Maps image points to the table plane in the robot frame, shape (3, 3)."""
++
++Pose = NewType("Pose", NDArray[np.float64])
++"""Rigid transform, shape (4, 4): local coordinates to parent frame."""
+diff --git a/pyproject.toml b/pyproject.toml
+index 2dad3c4..3d2b39e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -41,7 +41,6 @@ omit = [
+     "hoop_guide/ui.py",
+     "hoop_guide/viewer/window.py",
+     # Interface stubs only, remove from here together with the implementation.
+-    "hoop_guide/rods.py",
+ ]
+ 
+ [tool.coverage.report]
+diff --git a/tests/unit/test_app.py b/tests/unit/test_app.py
+index af9201b..e63d409 100644
+--- a/tests/unit/test_app.py
++++ b/tests/unit/test_app.py
+@@ -180,8 +180,16 @@ def test_invalid_option_shows_warning_and_returns_to_menu(tmp_path):
+     assert "soft_home" in robot_calls(log)
+ 
+ 
+-@pytest.mark.parametrize("key", MODE_KEYS)
+-def test_puzzle_modes_are_not_implemented_yet(tmp_path, key):
++@pytest.mark.parametrize("key", MODE_KEYS[:2], ids=["A1", "A2"])
++def test_straight_rod_modes_preview_geometry_without_moving_robot(tmp_path, key):
++    log, _ = run_app(tmp_path, answers=[key, "0"])
++
++    assert any("rod geometry ready" in text for text in messages(log, "info"))
++    assert robot_calls(log) == ["initialize(should_home=True)", "shutdown"]
++
++
++@pytest.mark.parametrize("key", MODE_KEYS[2:], ids=["B", "C", "D"])
++def test_unimplemented_rod_modes_show_warning(tmp_path, key):
+     log, _ = run_app(tmp_path, answers=[key, "0"])
+ 
+     assert messages(log, "warning")[-1].endswith("is not implemented yet.")
+diff --git a/tests/unit/test_geometry.py b/tests/unit/test_geometry.py
+new file mode 100644
+index 0000000..106af49
+--- /dev/null
++++ b/tests/unit/test_geometry.py
+@@ -0,0 +1,115 @@
++import math
++
++import numpy as np
++import pytest
++
++from hoop_guide.geometry import flange_pose_for_hoop
++from hoop_guide.geometry import inverse_pose
++from hoop_guide.geometry import plate_to_robot
++from hoop_guide.geometry import transform_directions
++from hoop_guide.geometry import transform_points
++from hoop_guide.plate import PlatePose
++from hoop_guide.types import Directions3D
++from hoop_guide.types import Points3D
++from hoop_guide.types import Pose
++
++
++def test_plate_frame_origin_moves_to_plate_center_and_height():
++    transform = plate_to_robot(PlatePose(0.45, 0.10, 0), 0.08)
++
++    actual = transform_points(Points3D(np.array([[0.0, 0.0, 0.0]])), transform)
++
++    np.testing.assert_allclose(actual, [[0.45, 0.10, 0.08]])
++
++
++def test_plate_frame_ninety_degree_rotation_preserves_z():
++    transform = plate_to_robot(PlatePose(0.0, 0.0, math.pi / 2), 0.05)
++
++    actual = transform_points(Points3D(np.array([[0.1, 0.0, 0.2]])), transform)
++
++    np.testing.assert_allclose(actual, [[0.0, 0.1, 0.25]], atol=1e-12)
++
++
++def test_transform_directions_ignores_translation_and_preserves_norm():
++    transform = plate_to_robot(PlatePose(5.0, 6.0, math.pi / 2), 7.0)
++    directions = Directions3D(np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0]]))
++
++    actual = transform_directions(directions, transform)
++
++    expected = [[0.0, 1.0, 0.0], [0.0, 0.0, -1.0]]
++    np.testing.assert_allclose(actual, expected, atol=1e-12)
++
++
++def test_inverse_pose_undoes_rotation_and_translation():
++    transform = plate_to_robot(PlatePose(0.3, -0.2, -math.pi / 3), 0.4)
++
++    result = inverse_pose(transform)
++
++    np.testing.assert_allclose(result @ transform, np.eye(4), atol=1e-12)
++
++
++def test_hoop_to_flange_conversion_accounts_for_adapter_rotation():
++    # Flange-to-hoop includes a 90-degree mounting rotation and 15 cm offset.
++    hoop_in_flange = Pose(np.eye(4))
++    hoop_in_flange[:3, :3] = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
++    hoop_in_flange[:3, 3] = [0.15, 0.0, 0.0]
++    desired_hoop = plate_to_robot(PlatePose(0.45, 0.10, math.pi / 2), 0.30)
++
++    flange = flange_pose_for_hoop(desired_hoop, hoop_in_flange)
++
++    np.testing.assert_allclose(
++        flange @ hoop_in_flange, desired_hoop, atol=1e-12
++    )
++
++
++def test_empty_points_and_directions_are_valid():
++    pose = plate_to_robot(PlatePose(0.0, 0.0, 0.0), 0.0)
++
++    assert transform_points(Points3D(np.empty((0, 3))), pose).shape == (0, 3)
++    directions = Directions3D(np.empty((0, 3)))
++    assert transform_directions(directions, pose).shape == (0, 3)
++
++
++@pytest.mark.parametrize("value", [float("nan"), float("inf")])
++def test_plate_transform_rejects_nonfinite_pose_and_height(value):
++    with pytest.raises(ValueError, match="finite"):
++        plate_to_robot(PlatePose(value, 0.0, 0.0), 0.0)
++    with pytest.raises(ValueError, match="finite"):
++        plate_to_robot(PlatePose(0.0, 0.0, 0.0), value)
++
++
++@pytest.mark.parametrize(
++    "invalid",
++    [
++        np.zeros((3, 3)),
++        np.full((4, 4), np.nan),
++        np.diag([1.0, 1.0, 1.0, 2.0]),
++        np.diag([2.0, 1.0, 1.0, 1.0]),
++        np.diag([-1.0, 1.0, 1.0, 1.0]),
++    ],
++    ids=["shape", "nonfinite", "last-row", "nonorthogonal", "reflection"],
++)
++def test_invalid_rigid_transform_is_rejected(invalid):
++    with pytest.raises(ValueError, match="Pose"):
++        inverse_pose(Pose(invalid))
++
++
++@pytest.mark.parametrize(
++    "invalid", [np.zeros(3), np.full((1, 3), np.nan), np.zeros((1, 2))]
++)
++def test_transform_points_rejects_invalid_shape_or_values(invalid):
++    pose = plate_to_robot(PlatePose(0.0, 0.0, 0.0), 0.0)
++
++    with pytest.raises(ValueError, match="Points"):
++        transform_points(Points3D(invalid), pose)
++
++
++@pytest.mark.parametrize(
++    "invalid",
++    [np.zeros(3), np.full((1, 3), np.inf), np.zeros((1, 2)), np.zeros((1, 3))],
++)
++def test_transform_directions_requires_valid_unit_vectors(invalid):
++    pose = plate_to_robot(PlatePose(0.0, 0.0, 0.0), 0.0)
++
++    with pytest.raises(ValueError, match="Directions"):
++        transform_directions(Directions3D(invalid), pose)
+diff --git a/tests/unit/test_rods.py b/tests/unit/test_rods.py
+new file mode 100644
+index 0000000..b173dfa
+--- /dev/null
++++ b/tests/unit/test_rods.py
+@@ -0,0 +1,175 @@
++import math
++
++import numpy as np
++import pytest
++
++from hoop_guide.plate import PlatePose
++from hoop_guide.rods import ArcSegment
++from hoop_guide.rods import LineSegment
++from hoop_guide.rods import model_for_puzzle
++from hoop_guide.rods import Puzzle
++from hoop_guide.rods import ROD_A_NOMINAL_HEIGHT
++from hoop_guide.rods import RodModel
++from hoop_guide.rods import rod_centerline
++from hoop_guide.rods import STOP_HEIGHT
++
++
++def test_a1_starts_at_rod_tip_ends_at_stop_height_and_goes_down():
++    points, tangents = rod_centerline(
++        Puzzle.A1, PlatePose(0.0, 0.0, 0.0), 0.0, 0.020
++    )
++
++    np.testing.assert_allclose(points[0], [0.0, 0.0, ROD_A_NOMINAL_HEIGHT])
++    np.testing.assert_allclose(points[-1], [0.0, 0.0, STOP_HEIGHT])
++    np.testing.assert_allclose(tangents, np.tile([0, 0, -1], (len(points), 1)))
++    assert np.all(np.diff(points[:, 2]) < 0)
++
++
++def test_a2_has_the_same_local_centerline_as_a1():
++    pose = PlatePose(0.0, 0.0, 0.0)
++
++    a1 = rod_centerline(Puzzle.A1, pose, 0.0, 0.015)
++    a2 = rod_centerline(Puzzle.A2, pose, 0.0, 0.015)
++
++    for left, right in zip(a1, a2):
++        np.testing.assert_allclose(left, right)
++
++
++def test_a1_transforms_to_robot_frame_including_plate_height():
++    points, tangents = rod_centerline(
++        Puzzle.A1, PlatePose(0.45, -0.1, math.pi / 2), 0.08, 0.02
++    )
++
++    np.testing.assert_allclose(points[0], [0.45, -0.1, 0.28], atol=1e-12)
++    np.testing.assert_allclose(points[-1], [0.45, -0.1, 0.12], atol=1e-12)
++    np.testing.assert_allclose(tangents[0], [0.0, 0.0, -1.0])
++
++
++def test_a1_includes_endpoints_and_never_exceeds_step():
++    step = 0.017
++
++    points, tangents = model_for_puzzle(Puzzle.A1).sample(step)
++
++    lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
++    assert np.all(lengths <= step + 1e-12)
++    np.testing.assert_allclose(np.linalg.norm(tangents, axis=1), 1.0)
++    assert len(points) == len(tangents)
++
++
++@pytest.mark.parametrize("step", [0.0, -0.01, float("nan"), float("inf")])
++def test_sampling_rejects_invalid_step(step):
++    with pytest.raises(ValueError, match="step"):
++        model_for_puzzle(Puzzle.A1).sample(step)
++
++
++@pytest.mark.parametrize("puzzle", [Puzzle.B, Puzzle.C, Puzzle.D])
++def test_unverified_puzzles_cannot_silently_generate_incorrect_geometry(puzzle):
++    with pytest.raises(NotImplementedError, match=puzzle.value):
++        model_for_puzzle(puzzle)
++
++
++def test_line_interpolation_uses_travel_distance_and_unit_tangent():
++    line = LineSegment((0.0, 0.0, 0.0), (0.03, 0.04, 0.0))
++
++    assert line.length == pytest.approx(0.05)
++    np.testing.assert_allclose(line.point_at(0.025), [0.015, 0.02, 0.0])
++    np.testing.assert_allclose(line.tangent_at(0.0), [0.6, 0.8, 0.0])
++
++
++@pytest.mark.parametrize("distance", [-0.01, 0.2, float("nan")])
++def test_line_rejects_distance_outside_segment(distance):
++    line = LineSegment((0.0, 0.0, 0.0), (0.0, 0.0, 0.1))
++
++    with pytest.raises(ValueError, match="Distance"):
++        line.point_at(distance)
++
++
++@pytest.mark.parametrize(
++    "start,end",
++    [
++        ((0, 0, 0), (0, 0, 0)),
++        ((0, 0, float("nan")), (0, 0, 1)),
++    ],
++)
++def test_line_rejects_invalid_endpoints(start, end):
++    with pytest.raises(ValueError, match="distinct finite"):
++        LineSegment(start, end)
++
++
++def test_arc_endpoints_and_tangents_follow_right_hand_rule():
++    arc = ArcSegment(
++        center=(0.0, 0.0, 0.0),
++        start_radius=(0.05, 0.0, 0.0),
++        axis=(0.0, 0.0, 1.0),
++        sweep=math.pi / 2,
++    )
++
++    assert arc.length == pytest.approx(0.05 * math.pi / 2)
++    np.testing.assert_allclose(arc.point_at(0), [0.05, 0, 0])
++    np.testing.assert_allclose(
++        arc.point_at(arc.length), [0, 0.05, 0], atol=1e-12
++    )
++    np.testing.assert_allclose(arc.tangent_at(0), [0, 1, 0])
++    np.testing.assert_allclose(
++        arc.tangent_at(arc.length), [-1, 0, 0], atol=1e-12
++    )
++
++
++def test_negative_arc_sweep_reverses_tangent():
++    arc = ArcSegment((0, 0, 0), (0.05, 0, 0), (0, 0, 1), -math.pi / 2)
++
++    np.testing.assert_allclose(
++        arc.point_at(arc.length), [0, -0.05, 0], atol=1e-12
++    )
++    np.testing.assert_allclose(arc.tangent_at(0), [0, -1, 0])
++
++
++@pytest.mark.parametrize(
++    "kwargs",
++    [
++        dict(
++            center=(float("nan"), 0, 0),
++            start_radius=(1, 0, 0),
++            axis=(0, 0, 1),
++            sweep=1,
++        ),
++        dict(center=(0, 0, 0), start_radius=(0, 0, 0), axis=(0, 0, 1), sweep=1),
++        dict(center=(0, 0, 0), start_radius=(1, 0, 0), axis=(0, 0, 1), sweep=0),
++        dict(center=(0, 0, 0), start_radius=(1, 0, 0), axis=(0, 0, 2), sweep=1),
++        dict(center=(0, 0, 0), start_radius=(1, 0, 1), axis=(0, 0, 1), sweep=1),
++    ],
++)
++def test_arc_rejects_invalid_geometry(kwargs):
++    with pytest.raises(ValueError, match="Arc"):
++        ArcSegment(**kwargs)
++
++
++def test_arc_rejects_distance_outside_segment():
++    arc = ArcSegment((0, 0, 0), (0.05, 0, 0), (0, 0, 1), math.pi / 2)
++
++    with pytest.raises(ValueError, match="Distance"):
++        arc.tangent_at(arc.length + 0.01)
++
++
++def test_composed_line_and_arc_have_no_duplicate_joint():
++    line = LineSegment((0.05, 0, 0.05), (0.05, 0, 0))
++    arc = ArcSegment((0, 0, 0), (0.05, 0, 0), (0, 0, 1), math.pi / 2)
++    rod = RodModel((line, arc))
++
++    points, tangents = rod.sample(0.02)
++
++    assert np.sum(np.linalg.norm(points - [0.05, 0, 0], axis=1) < 1e-12) == 1
++    np.testing.assert_allclose(points[-1], [0.0, 0.05, 0.0], atol=1e-12)
++    np.testing.assert_allclose(np.linalg.norm(tangents, axis=1), 1.0)
++
++
++def test_rod_model_rejects_no_segments_or_disconnected_segments():
++    with pytest.raises(ValueError, match="at least one"):
++        RodModel(())
++    with pytest.raises(ValueError, match="continuous"):
++        RodModel(
++            (
++                LineSegment((0, 0, 0), (0, 0, 0.1)),
++                LineSegment((0, 0, 0.2), (0, 0, 0.3)),
++            )
++        )

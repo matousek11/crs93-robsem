@@ -41,7 +41,6 @@ omit = [
     "hoop_guide/ui.py",
     "hoop_guide/viewer/window.py",
     # Interface stubs only, remove from here together with the implementation.
-    "hoop_guide/rods.py",
 ]
 
 [tool.coverage.report]

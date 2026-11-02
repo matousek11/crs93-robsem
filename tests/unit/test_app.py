@@ -180,11 +180,12 @@ def test_invalid_option_shows_warning_and_returns_to_menu(tmp_path):
     assert "soft_home" in robot_calls(log)
 
 
-@pytest.mark.parametrize("key", MODE_KEYS)
-def test_puzzle_modes_are_not_implemented_yet(tmp_path, key):
+@pytest.mark.parametrize("key", MODE_KEYS, ids=["A1", "A2", "B", "C", "D"])
+def test_rod_modes_preview_geometry_without_moving_robot(tmp_path, key):
     log, _ = run_app(tmp_path, answers=[key, "0"])
 
-    assert messages(log, "warning")[-1].endswith("is not implemented yet.")
+    assert any("rod geometry ready" in text for text in messages(log, "info"))
+    assert robot_calls(log) == ["initialize(should_home=True)", "shutdown"]
 
 
 @pytest.mark.parametrize(("key", "call"), HARDWARE_ACTIONS.items())
