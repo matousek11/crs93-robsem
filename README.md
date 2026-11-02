@@ -114,3 +114,104 @@ approach/retraction, and joint limits. `STOP_HEIGHT = 0.040 m` is a nominal
 **hoop center height**, not proof of passing below the 40 mm finish criterion.
 The code contains **no collision avoidance, orientation planner, IK motion
 planning, tracking or real-robot movement for puzzle modes** yet.
+
+## Offline hoop-orientation and adapter pose preview (update 3)
+
+The planning additions **do not** command the robot, compute IK or validate
+collisions. They convert the existing puzzle centerline into nominal complete
+**hoop-center poses** and, separately, into nominal **flange poses**:
+
+- `hoop_guide.planning.hoop_pose_path(...)`: creates N homogeneous matrices
+  `R_T_H` (each 4 x 4), in the robot frame. The hoop frame `H` has origin at
+  the center of the hole, local **+Z_H opposite the path tangent**, and local
+  **+Y_H pointing from ring center toward the holder**. The latter is selected
+  by projecting the horizontal direction toward the robot base into the hoop
+  plane. It is a **heuristic**, not a guaranteed safe mounting orientation.
+- The result stores `sharp_corner_indices` where the rod tangent jumps, and
+  `fallback_heading_indices` where the direction toward the base does not
+  uniquely determine holder orientation. Such locations need manual handling
+  and collision checking. `large_rotation_step_indices` also flags overly
+  large adjacent frame rotations (offline threshold 30 degrees).
+  The actual ring, holder and adapter have thickness;
+  following the rod centerline at sharp corners is **not necessarily possible**.
+- `hoop_guide.tool_setup.initial_offline_tool_estimate()` produces an
+  **UNVERIFIED, OFFLINE-ONLY** `ToolCalibration`:
+  - Flange -> adapter: identity by choice of adapter frame at flange
+    (coordinate convention, not a physical measurement).
+  - Adapter -> Hoop.step CAD frame: identity **ARBITRARY INITIAL GUESS**.
+    This is NOT a validated physical mounting. Replace with measured assembly.
+  - Hoop.step CAD -> ring center: **CAD-derived** translation of
+    `(0, -0.135, -0.0033)` meters (ring opening in CAD XY plane).
+- `path.flange_poses(tool_calibration)` refuses unverified mounting and known
+  sharp corners / ambiguous holder headings by default. Use
+  `path.flange_poses(tool_calibration, preview_only=True)` **strictly for offline
+  preview**. Even with a verified tool calibration and no flags, the returned
+  poses are NOT collision checked or executable robot motion.
+
+Try this without connecting to CRS93:
+
+```sh
+uv run python -m examples.preview_tool_path A1
+uv run python -m examples.preview_tool_path B --plate-x 0.45 --plate-y 0.10 --plate-height 0.08 --step 0.01
+uv run pytest tests/unit/test_planning.py --no-cov -v
+uv run pytest
+```
+
+The example plate pose/height `(0.45, 0.10, 0.08)` m and estimated mounting
+matrices are **BEST GUESS / DEMONSTRATION VALUES, NOT MEASURED OR FINAL**.
+The physical plate height and plate-to-robot frame need calibration; verify
+which `ctu_crs.fk/ik` output frame the adapter is bolted to, and measure the
+actual flange -> adapter -> hoop-CAD mounting including the yaw/roll/pitch.
+Verify the origin/orientation of the rod CAD models in the mounted plate frame,
+terminal 40 mm condition, ring/holder clearance at corners and bends, safe
+approach and retreat, IK continuity, joint limits and collisions before any
+actual motion. The path is for a **fixed plate pose**, not a time-parametrized
+prediction of a rotating plate.
+
+### Offline corner passage and clearance screening (fourth development patch)
+
+For a **nominal geometry-only** preview of the ring, its integral handle, the
+rod and the plate top, use:
+
+```shell
+uv run python -m examples.preview_clearance_path A1
+uv run python -m examples.preview_clearance_path B
+uv run python -m examples.preview_clearance_path C
+uv run python -m examples.preview_clearance_path D --step 0.003
+```
+
+The new `hoop_guide.clearance.screen_hoop_path()` function uses the previously
+implemented `RodModel` and adds:
+
+- smooth cubic-Hermite **center reference** at non-tangent rod junctions;
+- a discrete/global search for a continuous hoop handle heading about the rod
+  tangent; that heading may depart from the original preference toward the
+  robot base to avoid a modeled collision;
+- conservative capsule envelopes for the square-section rod, the annular hoop
+  **and its integrated handle** (the latter is part of `Hoop.step`), and the
+  horizontal infinite plate-top plane;
+- adaptive interpolation checks between adjacent poses, not only individual
+  sample poses;
+- explicit `unresolved_intervals` and `restricted_corner_indices` diagnostics.
+
+The geometric surrogate is based on `Hoop.step`, the supplied drawings and the
+CAD-derived rod centerlines. In the source code, constants for the envelope and
+2 mm provisional clearance target are documented. A STEP-mesh *vertex*
+inspection informed the envelope radii, but is **not an exact solid-to-solid
+proof**; mounting tolerances, CAD surface coverage, actual plate position and
+hardware effects still require verification. The portions of rod below the
+nominal 40 mm stop are extended from the last segment as an explicitly marked
+**best-guess approximation**, especially for puzzle D.
+
+**Do not confuse `geometric_screen_passed=True` with safe robot execution.**
+This only means a continuous candidate passed the conservative *approximate*
+hoop/handle-vs-rod/plate screen for the specific example plate pose. No
+full-geometry CRS adapter collision check, robot collision check, IK,
+velocity/timing limits, turntable motion or hardware commands are present.
+The `flange_preview()` method remains an offline diagnostic and deliberately
+accepts an unverified tool transform **only** as an explicitly labeled preview.
+
+The nominal 40 mm hoop-center endpoint is not independently checked to meet
+any strict below-40-mm scoring requirement. Verify the exact scoring datum
+before changing it. For real hardware, measure and validate the mounted puzzle,
+actual flange/TCP conventions and the complete adapter-assembly transform.

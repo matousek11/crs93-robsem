@@ -58,3 +58,42 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 | Ctrl+C | Stops the motion, waits until the robot stands still, then `soft_home()` and `close()`. Further Ctrl+C during this is ignored. Works anytime. | The robot always ends in a known state and the connection is closed, as the station manual requires. |
 
 The software stop does not replace the Emergency Stop button. If the robot behaves unexpectedly, press it.
+
+## Offline tool-pose planning preview (no robot motion)
+
+To inspect the nominal orientation of the ring and the corresponding estimated
+flange poses (with explicitly unverified mounting assumptions), run:
+
+```sh
+uv run python -m examples.preview_tool_path A1
+uv run python -m examples.preview_tool_path D --step 0.01
+```
+
+It displays the first/last 4 x 4 matrices, sharp rod-corner indices and any
+ambiguous holder-direction indices, plus excessive adjacent rotation
+steps. It does **not** move the robot or test
+collision avoidance. The default plate pose and tool mounting are examples,
+not measurements. Code for robot motion must **not** use them as calibration.
+See README section "Offline hoop-orientation and adapter pose preview".
+
+### Kontrola průchodu kolem zlomů – pouze offline
+
+```shell
+uv run python -m examples.preview_clearance_path A1
+uv run python -m examples.preview_clearance_path B
+uv run python -m examples.preview_clearance_path C
+uv run python -m examples.preview_clearance_path D
+```
+
+Funkce `screen_hoop_path()` vytváří návrh poloh a orientací obruče, vyhlazuje
+referenční průchod v ostrých zlomech a optimalizuje natočení rukojeti. Následně
+kontroluje její přibližnou prostorovou obálku vůči tyči a vodorovné rovině desky
+**včetně přechodů mezi vzorky**. Výpis obsahuje nejmenší vypočtenou rezervu,
+problematické intervaly a ohyby s omezeným prostorem na vyhlazení.
+
+`geometric_screen_passed=True` **není** povolení pohybu skutečného robota.
+Obálka obruče a rukojeti je konzervativní aproximace výkresů/STEP (nikoli
+exaktní CAD kolizní test), spodní konec tyče je mimo původní středovou křivku
+pouze odhadnut, montáž adaptéru není kalibrovaná a chybí IK, kolize článků,
+časování i sledování otočného stolu. Všechny zkušební hodnoty výšky a umístění
+desky se musí fyzicky ověřit. Tento příkaz nevydává žádné povely robotu.
