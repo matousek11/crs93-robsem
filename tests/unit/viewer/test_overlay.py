@@ -9,8 +9,12 @@ from hoop_guide.types import PixelPoints
 from hoop_guide.viewer.overlay import AXIS_X_COLOR
 from hoop_guide.viewer.overlay import AXIS_Y_COLOR
 from hoop_guide.viewer.overlay import MARKER_COLOR
+from hoop_guide.viewer.overlay import TEXT_ORIGIN
 from hoop_guide.viewer.overlay import draw_markers
 from hoop_guide.viewer.overlay import draw_plate_pose
+from hoop_guide.viewer.overlay import render
+from hoop_guide.viewer.overlay import status_line
+from hoop_guide.vision import Frame
 from hoop_guide.vision import MarkerDetection
 
 # One pixel is one millimeter on the table plane.
@@ -82,3 +86,27 @@ def test_drawing_leaves_input_image_unchanged(image, draw):
     draw(image)
 
     np.testing.assert_array_equal(image, original)
+
+
+@pytest.mark.parametrize(
+    ("marker_ids", "fps", "expected"),
+    [
+        ([1, 0], 9.96, "10.0 fps | markers: 0, 1"),
+        ([], 10.0, "10.0 fps | markers: none"),
+        ([3], None, "-- fps | markers: 3"),
+    ],
+    ids=["sorted-ids", "no-markers", "unknown-fps"],
+)
+def test_status_line_shows_fps_and_marker_ids(image, marker_ids, fps, expected):
+    frame = Frame(image, 0.0, tuple(marker(i, 0, 0, 10) for i in marker_ids))
+
+    assert status_line(frame, fps) == expected
+
+
+def test_render_draws_markers_and_status_line(image):
+    frame = Frame(image, 0.0, (marker(7, 50, 100, 80),))
+
+    result = render(frame, 10.0)
+
+    assert color_at(result, 90, 180) == MARKER_COLOR
+    assert result[: TEXT_ORIGIN[1], : TEXT_ORIGIN[1] * 3].any()

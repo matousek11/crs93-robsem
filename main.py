@@ -11,7 +11,11 @@ from hoop_guide.hardware.robot import Robot
 from hoop_guide.logs import LOG_FILE_NAME
 from hoop_guide.logs import setup_logging
 from hoop_guide.ui import RichUI
+from hoop_guide.viewer.fps import FpsMeter
+from hoop_guide.viewer.overlay import render
 from hoop_guide.viewer.window import Viewer
+from hoop_guide.vision import Frame
+from hoop_guide.vision import process_image
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +42,12 @@ def main() -> int:
     with contextlib.ExitStack() as stack:
         if config.should_show_view and robot.is_real:
             viewer = stack.enter_context(Viewer())
-            stack.enter_context(CameraStream(robot, viewer.show))
+            fps_meter = FpsMeter()
+
+            def show(frame: Frame) -> None:
+                viewer.show(render(frame, fps_meter.tick(frame.timestamp)))
+
+            stack.enter_context(CameraStream(robot, process_image, show))
         App(config, robot, ui, run_dir).run()
     return 0
 

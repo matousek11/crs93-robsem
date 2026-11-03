@@ -30,10 +30,11 @@ hoop_guide/              # main package
 ├── estimation.py        # center of rotation, ω, phase, pose prediction
 ├── planning.py          # hoop path along the rod, handle orientation
 ├── control.py           # tracking loop, step timing
-├── camera_stream.py     # background thread that keeps the latest camera image
+├── camera_stream.py     # background thread: grab, timestamp, process, keep the latest Frame
 ├── viewer/              # camera window, runs in a separate process
 │   ├── window.py        # viewer process, latest frame queue, cv2.imshow loop
-│   └── overlay.py       # draws markers, plate frame, rod and prediction into the image
+│   ├── overlay.py       # draws markers, plate frame, rod and prediction into the image
+│   └── fps.py           # frame rate shown in the window
 └── hardware/            # the only place that uses ctu_crs
     ├── interfaces.py    # Protocols for robot and camera
     ├── robot.py         # thin wrapper over ctu_crs, real or virtual robot
@@ -109,9 +110,9 @@ Everything in the repository is in English: code, comments, docstrings, terminal
 - Run recording: images, estimates, sent commands and timestamps, so a run can be replayed offline and turned into a regression test.
 - Before `soft_home()` on exit, retract the hoop from the rod along the trajectory, otherwise the direct move home can hit the rod.
 - Camera window for the virtual robot, e.g. replaying recorded runs.
-- Verify in the lab that `grab_image()` from `ctu_crs` reaches the camera's 10 fps, it starts and stops grabbing on every call.
+- Verify in the lab that `grab_image()` from `ctu_crs` reaches the camera's 10 fps, it starts and stops grabbing on every call. The camera window shows the measured rate.
 - Verify in the lab whether the controller `STOP:` command can be used for an immediate stop on `c`.
-- Verify the ArUco marker IDs and their corners on the plate (`MARKER_CENTERS` in `plate.py`).
+- Verify the ArUco marker IDs and their corners on the plate (`MARKER_CENTERS` in `plate.py`), the camera window shows all detected IDs. Detection uses `DICT_4X4_50`, IDs above 49 would not be found.
 - Decide how to get the plate height, the plate lies on a sponge, so it is not constant.
 - Confirm which drawing in ROB1-2025-hw belongs to each puzzle variant A1 to D.
 - Interface stubs raise `NotImplementedError`. When implementing one, remove its module from `omit` in `[tool.coverage.run]`.

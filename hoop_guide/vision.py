@@ -2,10 +2,27 @@
 
 import dataclasses
 
+import cv2
+import numpy as np
+
 from hoop_guide.types import Homography
 from hoop_guide.types import Image
 from hoop_guide.types import PixelPoints
 from hoop_guide.types import PlanePoints
+
+# Dictionary used in the course, IDs 0 to 49.
+ARUCO_DICTIONARY = cv2.aruco.DICT_4X4_50
+
+
+def _create_detector() -> cv2.aruco.ArucoDetector:
+    parameters = cv2.aruco.DetectorParameters()
+    # Sub-pixel corners, the plate pose is computed from them.
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICTIONARY)
+    return cv2.aruco.ArucoDetector(dictionary, parameters)
+
+
+_DETECTOR = _create_detector()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -15,14 +32,43 @@ class MarkerDetection:
     Attributes:
         marker_id: ID of the marker in the ArUco 4x4 dictionary.
         corners: Corners of the marker, shape (4, 2), pixels, in the ArUco
-            order: top left, top right, bottom right, bottom left.
+            order: top left, top right, bottom right, bottom left of the
+            marker itself, so they rotate with it.
     """
 
     marker_id: int
     corners: PixelPoints
 
 
-def detect_markers(image: Image) -> list[MarkerDetection]:
+@dataclasses.dataclass(frozen=True)
+class Frame:
+    """Camera image with the results computed from it.
+
+    Attributes:
+        image: Camera image.
+        timestamp: time.monotonic() right after the image was grabbed [s].
+        markers: Markers detected in the image.
+    """
+
+    image: Image
+    timestamp: float
+    markers: tuple[MarkerDetection, ...]
+
+
+def process_image(image: Image, timestamp: float) -> Frame:
+    """Runs the vision on one camera image.
+
+    Args:
+        image: Camera image.
+        timestamp: time.monotonic() right after the image was grabbed [s].
+
+    Returns:
+        The image with its results.
+    """
+    return Frame(image, timestamp, detect_markers(image))
+
+
+def detect_markers(image: Image) -> tuple[MarkerDetection, ...]:
     """Finds ArUco 4x4 markers in the image.
 
     Args:
@@ -32,7 +78,18 @@ def detect_markers(image: Image) -> list[MarkerDetection]:
         Detected markers, empty if none is visible. Markers occluded so much
         that not all four corners are found are not returned.
     """
-    raise NotImplementedError
+    corners, ids, _ = _DETECTOR.detectMarkers(image)
+    if ids is None:
+        return ()
+    return tuple(
+        MarkerDetection(
+            int(marker_id),
+            PixelPoints(marker_corners.reshape(4, 2).astype(np.float64)),
+        )
+        for marker_id, marker_corners in zip(
+            ids.flatten(), corners, strict=True
+        )
+    )
 
 
 def image_to_plane(points: PixelPoints, homography: Homography) -> PlanePoints:

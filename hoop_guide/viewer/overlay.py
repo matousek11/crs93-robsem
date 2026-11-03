@@ -13,14 +13,78 @@ from hoop_guide.types import Homography
 from hoop_guide.types import Image
 from hoop_guide.types import PixelPoints
 from hoop_guide.types import PlanePoints
+from hoop_guide.vision import Frame
 from hoop_guide.vision import MarkerDetection
 
 # Colors are BGR.
 MARKER_COLOR = (255, 255, 0)
 AXIS_X_COLOR = (0, 0, 255)
 AXIS_Y_COLOR = (0, 255, 0)
+TEXT_COLOR = (255, 255, 255)
+TEXT_OUTLINE_COLOR = (0, 0, 0)
 AXIS_LENGTH = 0.05  # [m]
 LINE_THICKNESS = 2  # [px]
+TEXT_ORIGIN = (10, 30)  # [px], bottom left of the text
+TEXT_SCALE = 1.0
+TEXT_THICKNESS = 2  # [px]
+TEXT_OUTLINE_THICKNESS = 5  # [px]
+
+
+def render(frame: Frame, fps: float | None) -> Image:
+    """Draws everything computed from the frame for the camera window.
+
+    Args:
+        frame: Camera image with its results.
+        fps: Frame rate of the stream, None while unknown.
+
+    Returns:
+        Copy of the image with the markers and a status line.
+    """
+    result = draw_markers(frame.image, frame.markers)
+    return draw_text(result, status_line(frame, fps))
+
+
+def status_line(frame: Frame, fps: float | None) -> str:
+    """Returns the status line, e.g. '10.0 fps | markers: 0, 1'.
+
+    Args:
+        frame: Camera image with its results.
+        fps: Frame rate of the stream, None while unknown.
+    """
+    rate = "-- fps" if fps is None else f"{fps:.1f} fps"
+    ids = sorted(marker.marker_id for marker in frame.markers)
+    markers = ", ".join(str(i) for i in ids) if ids else "none"
+    return f"{rate} | markers: {markers}"
+
+
+def draw_text(image: Image, text: str) -> Image:
+    """Draws one line of text in the top left corner.
+
+    The text has a dark outline, so it is readable on any background.
+
+    Args:
+        image: Camera image.
+        text: Text to draw.
+
+    Returns:
+        Copy of the image with the text.
+    """
+    result = image.copy()
+    for color, thickness in (
+        (TEXT_OUTLINE_COLOR, TEXT_OUTLINE_THICKNESS),
+        (TEXT_COLOR, TEXT_THICKNESS),
+    ):
+        cv2.putText(
+            result,
+            text,
+            TEXT_ORIGIN,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            TEXT_SCALE,
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+    return Image(result)
 
 
 def draw_markers(image: Image, markers: Sequence[MarkerDetection]) -> Image:
