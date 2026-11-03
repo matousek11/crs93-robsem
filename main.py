@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import sys
+from collections.abc import Callable
 
 from hoop_guide.app import App
 from hoop_guide.camera_stream import CameraStream
@@ -40,16 +41,30 @@ def main() -> int:
         )
         return 1
     with contextlib.ExitStack() as stack:
-        if config.should_show_view and robot.is_real:
-            viewer = stack.enter_context(Viewer())
-            fps_meter = FpsMeter()
-
-            def show(frame: Frame) -> None:
-                viewer.show(render(frame, fps_meter.tick(frame.timestamp)))
-
-            stack.enter_context(CameraStream(robot, process_image, show))
+        if robot.is_real:
+            on_frame = _create_frame_handler(stack, config.should_show_view)
+            stack.enter_context(CameraStream(robot, process_image, on_frame))
         App(config, robot, ui, run_dir).run()
     return 0
+
+
+def _create_frame_handler(
+    stack: contextlib.ExitStack[bool | None], should_show_view: bool
+) -> Callable[[Frame], None]:
+    """Returns what to do with every Frame, opens the window if shown.
+
+    The window is added to the stack before the camera stream, so the stream
+    stops first and never sends images to a closed window.
+    """
+    if not should_show_view:
+        return lambda frame: None
+    viewer = stack.enter_context(Viewer())
+    fps_meter = FpsMeter()
+
+    def show(frame: Frame) -> None:
+        viewer.show(render(frame, fps_meter.tick(frame.timestamp)))
+
+    return show
 
 
 if __name__ == "__main__":
