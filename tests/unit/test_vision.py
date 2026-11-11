@@ -1,3 +1,5 @@
+import math
+
 import cv2
 import numpy as np
 import pytest
@@ -5,8 +7,11 @@ from hypothesis import given
 from hypothesis import settings
 from hypothesis import strategies as st
 
+from hoop_guide.types import Homography
+from hoop_guide.types import PixelPoints
 from hoop_guide.vision import ARUCO_DICTIONARY
 from hoop_guide.vision import detect_markers
+from hoop_guide.vision import image_to_plane
 from hoop_guide.vision import process_image
 
 CANVAS_SIZE = 400
@@ -102,6 +107,49 @@ def test_detected_corners_match_generated_marker(marker_id, angle):
     np.testing.assert_allclose(
         markers[0].corners, corners, atol=CORNER_TOLERANCE
     )
+
+
+def test_image_to_plane_applies_the_homography_in_order():
+    points = PixelPoints(np.array([[0.0, 0.0], [1000.0, 0.0], [0.0, 500.0]]))
+    homography = Homography(np.diag([0.001, 0.002, 1.0]))
+
+    plane = image_to_plane(points, homography)
+
+    np.testing.assert_allclose(plane, [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+
+
+def test_image_to_plane_of_no_points_is_empty():
+    plane = image_to_plane(PixelPoints(np.zeros((0, 2))), Homography(np.eye(3)))
+
+    assert plane.shape == (0, 2)
+
+
+def test_image_to_plane_rejects_a_bad_point_shape():
+    homography = Homography(np.eye(3))
+
+    with pytest.raises(ValueError, match=r"\(N, 2\)"):
+        image_to_plane(PixelPoints(np.zeros(4)), homography)
+    with pytest.raises(ValueError, match=r"\(N, 2\)"):
+        image_to_plane(PixelPoints(np.zeros((2, 3))), homography)
+
+
+def test_image_to_plane_rejects_a_bad_homography_shape():
+    points = PixelPoints(np.zeros((1, 2)))
+
+    with pytest.raises(ValueError, match=r"\(3, 3\)"):
+        image_to_plane(points, Homography(np.eye(2)))
+
+
+def test_image_to_plane_rejects_non_finite_values():
+    homography = Homography(np.eye(3))
+
+    with pytest.raises(ValueError, match="finite"):
+        image_to_plane(PixelPoints(np.array([[math.nan, 0.0]])), homography)
+
+    broken = np.eye(3)
+    broken[0, 0] = math.inf
+    with pytest.raises(ValueError, match="finite"):
+        image_to_plane(PixelPoints(np.zeros((1, 2))), Homography(broken))
 
 
 def test_process_image_keeps_image_and_timestamp_and_adds_markers():

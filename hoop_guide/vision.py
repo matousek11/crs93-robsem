@@ -92,6 +92,10 @@ def detect_markers(image: Image) -> tuple[MarkerDetection, ...]:
     )
 
 
+_IMAGE_POINT_DIMENSION = 2
+_HOMOGRAPHY_SHAPE = (3, 3)
+
+
 def image_to_plane(points: PixelPoints, homography: Homography) -> PlanePoints:
     """Maps image points to the table plane in the robot frame.
 
@@ -104,5 +108,24 @@ def image_to_plane(points: PixelPoints, homography: Homography) -> PlanePoints:
 
     Returns:
         Points on the table plane, same order as the input.
+
+    Raises:
+        ValueError: Points are not shaped (N, 2), the homography is not
+            3x3, or a value is not finite.
     """
-    raise NotImplementedError
+    if (
+        points.ndim != _IMAGE_POINT_DIMENSION
+        or points.shape[1] != _IMAGE_POINT_DIMENSION
+    ):
+        raise ValueError("Image points must have shape (N, 2).")
+    if homography.shape != _HOMOGRAPHY_SHAPE:
+        raise ValueError("Homography must have shape (3, 3).")
+    if not np.isfinite(points).all() or not np.isfinite(homography).all():
+        raise ValueError("Image points and homography must be finite.")
+    if len(points) == 0:
+        return PlanePoints(np.zeros((0, 2), dtype=np.float64))
+    transformed = cv2.perspectiveTransform(
+        np.asarray(points, dtype=np.float64).reshape(-1, 1, 2),
+        np.asarray(homography, dtype=np.float64),
+    )
+    return PlanePoints(np.asarray(transformed, dtype=np.float64).reshape(-1, 2))

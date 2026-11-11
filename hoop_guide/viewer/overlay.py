@@ -119,7 +119,7 @@ def draw_plate_pose(
     Returns:
         Copy of the image with the plate axes.
     """
-    cos, sin = np.cos(pose.theta), np.sin(pose.theta)
+    cos, sin = np.cos(pose.heading), np.sin(pose.heading)
     origin = np.array([pose.x, pose.y])
     axes_ends = origin + AXIS_LENGTH * np.array([[cos, sin], [-sin, cos]])
     points = _plane_to_image(

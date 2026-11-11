@@ -55,14 +55,14 @@ def test_draw_markers_without_markers_returns_same_content(image):
 
 
 @pytest.mark.parametrize(
-    ("theta", "x_axis_pixel", "y_axis_pixel"),
+    ("heading", "x_axis_pixel", "y_axis_pixel"),
     [(0.0, (125, 100), (100, 125)), (math.pi / 2, (100, 125), (75, 100))],
     ids=["aligned", "quarter-turn"],
 )
 def test_draw_plate_pose_draws_axes_from_plate_center(
-    image, theta, x_axis_pixel, y_axis_pixel
+    image, heading, x_axis_pixel, y_axis_pixel
 ):
-    pose = PlatePose(x=0.1, y=0.1, theta=theta)
+    pose = PlatePose(x=0.1, y=0.1, heading=heading)
 
     result = draw_plate_pose(image, pose, MM_PER_PIXEL)
 

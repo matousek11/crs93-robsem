@@ -67,7 +67,10 @@ Everything in the repository is in English: code, comments, docstrings, terminal
 - Type hints on all functions, Google style docstrings on public modules, classes and functions.
   - do not add unnecessary or duplicate doc blocks/comments
   - add a comment only when the code itself cannot tell it. Together with the code it must be enough to understand what is going on, as short as possible but not shorter
+  - state only what the name does not already say: which object, which axis, the sign, the unit. `heading` is the angle of the plate x axis from the robot x axis about z, positive counterclockwise [rad]
+  - the docstring must match the calculation. A fitted heading is the value of the line at `t_ref`. An angular velocity is the slope through every sample [rad/s], not a position and not a value taken from the last sample alone
 - Code is type checked by `mypy --strict`. Domain quantities have their own types (`typing.NewType`), never a bare `np.ndarray`, e.g. `Pose` (4x4 transform), `JointConfig` (6 joint angles), `ImagePoint`, `Homography`. Shape and frame are documented once at the type definition.
+- Names say what the value is and what it belongs to, in words: `plate_pose_times`, `plate_center_x`, `heading`, `angular_velocity`, `equation_coefficients`. Not `times`, `xs`, `theta`, `omega`, or `design`. Use the ordinary words of a formula (`cosine`, `sine`), not labels of matrix slots (`along_x`, `across_x`).
 - Boolean variables, attributes, arguments and properties start with `is_`, `has_`, `should_` or `can_`, e.g. `is_real`, `should_home`, never `real` or `home`. Ruff cannot check this, keep it in review.
 - Units in SI (meters, radians, seconds). Note the unit in the name or docstring where it is not obvious.
 - Do not overcomplicate things if there is better, easier and more readable solution to problem.
@@ -127,3 +130,5 @@ uv run pytest
 ```
 
 All must pass. `make` runs all of them. The same checks run automatically as a git pre-commit hook (`.pre-commit-config.yaml`), never bypass it with `--no-verify`.
+
+Do not deliver code changes as `.patch` files. Edit the files in git, commit them, and bring the change in by merge.
