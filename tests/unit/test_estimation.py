@@ -224,3 +224,14 @@ def test_fit_recovers_motion_and_full_turn_matches_position(
     assert future.heading == pytest.approx(
         motion.pose_ref.heading + 2 * math.pi, abs=CENTER_TOLERANCE
     )
+
+
+def test_table_motion_is_rotating_leftwise():
+    pose = PlatePose(0.0, 0.0, 0.0)
+    left_motion = TableMotion(0.0, 0.0, 0.5, 0.0, pose)
+    right_motion = TableMotion(0.0, 0.0, -0.5, 0.0, pose)
+    stopped_motion = TableMotion(0.0, 0.0, 0.0, 0.0, pose)
+
+    assert left_motion.is_rotating_leftwise
+    assert not right_motion.is_rotating_leftwise
+    assert not stopped_motion.is_rotating_leftwise

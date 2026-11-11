@@ -67,6 +67,11 @@ class TableMotion:
             heading=self.pose_ref.heading + turned_angle,
         )
 
+    @property
+    def is_rotating_leftwise(self) -> bool:
+        """True when the table turns counterclockwise (leftwise)."""
+        return self.angular_velocity > 0
+
 
 def fit_table_motion(
     samples: Sequence[tuple[float, PlatePose]],

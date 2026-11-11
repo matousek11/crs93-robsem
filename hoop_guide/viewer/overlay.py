@@ -8,6 +8,7 @@ from collections.abc import Sequence
 import cv2
 import numpy as np
 
+from hoop_guide.estimation import TableMotion
 from hoop_guide.plate import PlatePose
 from hoop_guide.types import Homography
 from hoop_guide.types import Image
@@ -30,31 +31,58 @@ TEXT_THICKNESS = 2  # [px]
 TEXT_OUTLINE_THICKNESS = 5  # [px]
 
 
-def render(frame: Frame, fps: float | None) -> Image:
+def render(
+    frame: Frame,
+    fps: float | None,
+    plate_pose: PlatePose | None = None,
+    homography: Homography | None = None,
+    table_estimation: TableMotion | None = None,
+) -> Image:
     """Draws everything computed from the frame for the camera window.
 
     Args:
         frame: Camera image with its results.
         fps: Frame rate of the stream, None while unknown.
+        plate_pose: Pose of the plate in the robot frame, if computed.
+        homography: Calibrated image to table plane homography, if available.
+        table_estimation: Fitted table motion, if available.
 
     Returns:
-        Copy of the image with the markers and a status line.
+        Copy of the image with the markers, plate axes and a status line.
     """
     result = draw_markers(frame.image, frame.markers)
-    return draw_text(result, status_line(frame, fps))
+    if plate_pose is not None and homography is not None:
+        result = draw_plate_pose(result, plate_pose, homography)
+    is_rotating_leftwise = (
+        table_estimation.is_rotating_leftwise
+        if table_estimation is not None
+        else None
+    )
+    return draw_text(result, status_line(frame, fps, is_rotating_leftwise))
 
 
-def status_line(frame: Frame, fps: float | None) -> str:
-    """Returns the status line, e.g. '10.0 fps | markers: 0, 1'.
+def status_line(
+    frame: Frame,
+    fps: float | None,
+    is_rotating_leftwise: bool | None = None,
+) -> str:
+    """Returns the status line with FPS, detected markers, and rotation.
 
     Args:
         frame: Camera image with its results.
         fps: Frame rate of the stream, None while unknown.
+        is_rotating_leftwise: True for leftwise (CCW), False for rightwise (CW),
+            None while unknown.
     """
     rate = "-- fps" if fps is None else f"{fps:.1f} fps"
     ids = sorted(marker.marker_id for marker in frame.markers)
     markers = ", ".join(str(i) for i in ids) if ids else "none"
-    return f"{rate} | markers: {markers}"
+    if is_rotating_leftwise is None:
+        rotation = "--"
+    else:
+        rotation = "Left" if is_rotating_leftwise else "Right"
+
+    return f"{rate} | markers: {markers} | rotation: {rotation}"
 
 
 def draw_text(image: Image, text: str) -> Image:
