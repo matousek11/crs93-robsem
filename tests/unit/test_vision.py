@@ -8,8 +8,10 @@ from hypothesis import settings
 from hypothesis import strategies as st
 
 from hoop_guide.types import Homography
+from hoop_guide.types import Image
 from hoop_guide.types import PixelPoints
 from hoop_guide.vision import ARUCO_DICTIONARY
+from hoop_guide.vision import detect_hoop_center
 from hoop_guide.vision import detect_markers
 from hoop_guide.vision import image_to_plane
 from hoop_guide.vision import process_image
@@ -161,3 +163,56 @@ def test_process_image_keeps_image_and_timestamp_and_adds_markers():
     assert frame.image is image
     assert frame.timestamp == pytest.approx(12.5)
     assert [m.marker_id for m in frame.markers] == [5]
+
+
+def test_detect_hoop_center_finds_center_accurately():
+    image = Image(blank_image())
+    cv2.circle(image, (180, 220), 40, (0, 0, 0), thickness=10)
+
+    center = detect_hoop_center(image)
+
+    assert center is not None
+    assert center[0] == pytest.approx(180.0, abs=1.0)
+    assert center[1] == pytest.approx(220.0, abs=1.0)
+
+
+def test_detect_hoop_center_selects_largest_contour():
+    image = Image(blank_image())
+    # Noise shapes.
+    cv2.circle(image, (50, 50), 5, (0, 0, 0), thickness=-1)
+    cv2.rectangle(image, (250, 60), (270, 80), (0, 0, 0), thickness=-1)
+    # Dominant hoop.
+    cv2.circle(image, (160, 200), 45, (0, 0, 0), thickness=10)
+
+    center = detect_hoop_center(image)
+
+    assert center is not None
+    assert center[0] == pytest.approx(160.0, abs=1.0)
+    assert center[1] == pytest.approx(200.0, abs=1.0)
+
+
+def test_detect_hoop_center_returns_none_on_blank_image():
+    image = Image(blank_image())
+
+    assert detect_hoop_center(image) is None
+
+
+def test_detect_hoop_center_returns_none_on_uniform_black_image():
+    black_image = Image(np.zeros((CANVAS_SIZE, CANVAS_SIZE, 3), dtype=np.uint8))
+
+    assert detect_hoop_center(black_image) is None
+
+
+def test_detect_hoop_center_returns_none_on_small_noise_only():
+    image = Image(blank_image())
+    cv2.circle(image, (100, 100), 3, (0, 0, 0), thickness=-1)
+
+    assert detect_hoop_center(image) is None
+
+
+def test_detect_hoop_center_rejects_invalid_image_shapes():
+    with pytest.raises(ValueError, match=r"shape \(H, W, 3\)"):
+        detect_hoop_center(Image(np.zeros((100, 100), dtype=np.uint8)))
+
+    with pytest.raises(ValueError, match=r"non-zero"):
+        detect_hoop_center(Image(np.zeros((0, 100, 3), dtype=np.uint8)))

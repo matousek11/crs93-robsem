@@ -92,8 +92,53 @@ def detect_markers(image: Image) -> tuple[MarkerDetection, ...]:
     )
 
 
+MIN_HOOP_AREA = 100.0  # [px^2]
+MAX_HOOP_AREA_RATIO = 0.8
+_COLOR_CHANNELS = 3
 _IMAGE_POINT_DIMENSION = 2
 _HOMOGRAPHY_SHAPE = (3, 3)
+
+
+def detect_hoop_center(image: Image) -> tuple[float, float] | None:
+    """Finds the center of the contrast hoop in the image.
+
+    Args:
+        image: Camera image, shape (H, W, 3), BGR.
+
+    Returns:
+        Center coordinates (u, v) in pixels, or None if the hoop is not found.
+
+    Raises:
+        ValueError: If the image does not have shape (H, W, 3) or is empty.
+    """
+    if (
+        image.ndim != _COLOR_CHANNELS
+        or image.shape[2] != _COLOR_CHANNELS
+        or image.shape[0] == 0
+        or image.shape[1] == 0
+    ):
+        raise ValueError(
+            "Image must have shape (H, W, 3) with non-zero dimensions."
+        )
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, thresholded = cv2.threshold(
+        gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+    contours, _ = cv2.findContours(
+        thresholded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return None
+
+    largest_contour = max(contours, key=cv2.contourArea)
+    area = float(cv2.contourArea(largest_contour))
+    total_area = float(image.shape[0] * image.shape[1])
+    if area < MIN_HOOP_AREA or area >= total_area * MAX_HOOP_AREA_RATIO:
+        return None
+
+    (center_x, center_y), _ = cv2.minEnclosingCircle(largest_contour)
+    return float(center_x), float(center_y)
 
 
 def image_to_plane(points: PixelPoints, homography: Homography) -> PlanePoints:
