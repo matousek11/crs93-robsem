@@ -30,10 +30,11 @@ hoop_guide/              # main package
 ├── estimation.py        # center of rotation, ω, phase, pose prediction
 ├── planning.py          # hoop path along the rod, handle orientation
 ├── control.py           # tracking loop, step timing
-├── camera_stream.py     # background thread that keeps the latest camera image
+├── camera_stream.py     # background thread: grab, timestamp, process, keep the latest Frame
 ├── viewer/              # camera window, runs in a separate process
 │   ├── window.py        # viewer process, latest frame queue, cv2.imshow loop
-│   └── overlay.py       # draws markers, plate frame, rod and prediction into the image
+│   ├── overlay.py       # draws markers, plate frame, rod and prediction into the image
+│   └── fps.py           # frame rate shown in the window
 └── hardware/            # the only place that uses ctu_crs
     ├── interfaces.py    # Protocols for robot and camera
     ├── robot.py         # thin wrapper over ctu_crs, real or virtual robot
@@ -66,7 +67,10 @@ Everything in the repository is in English: code, comments, docstrings, terminal
 - Type hints on all functions, Google style docstrings on public modules, classes and functions.
   - do not add unnecessary or duplicate doc blocks/comments
   - add a comment only when the code itself cannot tell it. Together with the code it must be enough to understand what is going on, as short as possible but not shorter
+  - state only what the name does not already say: which object, which axis, the sign, the unit. `heading` is the angle of the plate x axis from the robot x axis about z, positive counterclockwise [rad]
+  - the docstring must match the calculation. A fitted heading is the value of the line at `t_ref`. An angular velocity is the slope through every sample [rad/s], not a position and not a value taken from the last sample alone
 - Code is type checked by `mypy --strict`. Domain quantities have their own types (`typing.NewType`), never a bare `np.ndarray`, e.g. `Pose` (4x4 transform), `JointConfig` (6 joint angles), `ImagePoint`, `Homography`. Shape and frame are documented once at the type definition.
+- Names say what the value is and what it belongs to, in words: `plate_pose_times`, `plate_center_x`, `heading`, `angular_velocity`, `equation_coefficients`. Not `times`, `xs`, `theta`, `omega`, or `design`. Use the ordinary words of a formula (`cosine`, `sine`), not labels of matrix slots (`along_x`, `across_x`).
 - Boolean variables, attributes, arguments and properties start with `is_`, `has_`, `should_` or `can_`, e.g. `is_real`, `should_home`, never `real` or `home`. Ruff cannot check this, keep it in review.
 - Units in SI (meters, radians, seconds). Note the unit in the name or docstring where it is not obvious.
 - Do not overcomplicate things if there is better, easier and more readable solution to problem.
@@ -109,9 +113,9 @@ Everything in the repository is in English: code, comments, docstrings, terminal
 - Run recording: images, estimates, sent commands and timestamps, so a run can be replayed offline and turned into a regression test.
 - Before `soft_home()` on exit, retract the hoop from the rod along the trajectory, otherwise the direct move home can hit the rod.
 - Camera window for the virtual robot, e.g. replaying recorded runs.
-- Verify in the lab that `grab_image()` from `ctu_crs` reaches the camera's 10 fps, it starts and stops grabbing on every call.
+- Verify in the lab that `grab_image()` from `ctu_crs` reaches the camera's 10 fps, it starts and stops grabbing on every call. The camera window shows the measured rate.
 - Verify in the lab whether the controller `STOP:` command can be used for an immediate stop on `c`.
-- Verify the ArUco marker IDs and their corners on the plate (`MARKER_CENTERS` in `plate.py`).
+- Verify the ArUco marker IDs and their corners on the plate (`MARKER_CENTERS` in `plate.py`), the camera window shows all detected IDs. Detection uses `DICT_4X4_50`, IDs above 49 would not be found.
 - Decide how to get the plate height, the plate lies on a sponge, so it is not constant.
 - Confirm which drawing in ROB1-2025-hw belongs to each puzzle variant A1 to D.
 - Interface stubs raise `NotImplementedError`. When implementing one, remove its module from `omit` in `[tool.coverage.run]`.
@@ -126,3 +130,5 @@ uv run pytest
 ```
 
 All must pass. `make` runs all of them. The same checks run automatically as a git pre-commit hook (`.pre-commit-config.yaml`), never bypass it with `--no-verify`.
+
+Do not deliver code changes as `.patch` files. Edit the files in git, commit them, and bring the change in by merge.

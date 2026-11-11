@@ -20,8 +20,8 @@ class Config:
             the joint limits) followed by soft home (moving to the home
             position). If False, both are skipped, which is only safe when
             the control unit stayed powered on since the last homing.
-        should_show_view: Show the camera window. Only the real robot has
-            a camera.
+        should_show_view: Show the camera window. The camera and the
+            vision run without it too. Only the real robot has a camera.
     """
 
     is_real: bool

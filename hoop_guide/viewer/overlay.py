@@ -8,19 +8,111 @@ from collections.abc import Sequence
 import cv2
 import numpy as np
 
+from hoop_guide.estimation import TableMotion
 from hoop_guide.plate import PlatePose
 from hoop_guide.types import Homography
 from hoop_guide.types import Image
 from hoop_guide.types import PixelPoints
 from hoop_guide.types import PlanePoints
+from hoop_guide.vision import Frame
 from hoop_guide.vision import MarkerDetection
 
 # Colors are BGR.
 MARKER_COLOR = (255, 255, 0)
 AXIS_X_COLOR = (0, 0, 255)
 AXIS_Y_COLOR = (0, 255, 0)
+TEXT_COLOR = (255, 255, 255)
+TEXT_OUTLINE_COLOR = (0, 0, 0)
 AXIS_LENGTH = 0.05  # [m]
 LINE_THICKNESS = 2  # [px]
+TEXT_ORIGIN = (10, 30)  # [px], bottom left of the text
+TEXT_SCALE = 1.0
+TEXT_THICKNESS = 2  # [px]
+TEXT_OUTLINE_THICKNESS = 5  # [px]
+
+
+def render(
+    frame: Frame,
+    fps: float | None,
+    plate_pose: PlatePose | None = None,
+    homography: Homography | None = None,
+    table_estimation: TableMotion | None = None,
+) -> Image:
+    """Draws everything computed from the frame for the camera window.
+
+    Args:
+        frame: Camera image with its results.
+        fps: Frame rate of the stream, None while unknown.
+        plate_pose: Pose of the plate in the robot frame, if computed.
+        homography: Calibrated image to table plane homography, if available.
+        table_estimation: Fitted table motion, if available.
+
+    Returns:
+        Copy of the image with the markers, plate axes and a status line.
+    """
+    result = draw_markers(frame.image, frame.markers)
+    if plate_pose is not None and homography is not None:
+        result = draw_plate_pose(result, plate_pose, homography)
+    is_rotating_leftwise = (
+        table_estimation.is_rotating_leftwise
+        if table_estimation is not None
+        else None
+    )
+    return draw_text(result, status_line(frame, fps, is_rotating_leftwise))
+
+
+def status_line(
+    frame: Frame,
+    fps: float | None,
+    is_rotating_leftwise: bool | None = None,
+) -> str:
+    """Returns the status line with FPS, detected markers, and rotation.
+
+    Args:
+        frame: Camera image with its results.
+        fps: Frame rate of the stream, None while unknown.
+        is_rotating_leftwise: True for leftwise (CCW), False for rightwise (CW),
+            None while unknown.
+    """
+    rate = "-- fps" if fps is None else f"{fps:.1f} fps"
+    ids = sorted(marker.marker_id for marker in frame.markers)
+    markers = ", ".join(str(i) for i in ids) if ids else "none"
+    if is_rotating_leftwise is None:
+        rotation = "--"
+    else:
+        rotation = "Left" if is_rotating_leftwise else "Right"
+
+    return f"{rate} | markers: {markers} | rotation: {rotation}"
+
+
+def draw_text(image: Image, text: str) -> Image:
+    """Draws one line of text in the top left corner.
+
+    The text has a dark outline, so it is readable on any background.
+
+    Args:
+        image: Camera image.
+        text: Text to draw.
+
+    Returns:
+        Copy of the image with the text.
+    """
+    result = image.copy()
+    for color, thickness in (
+        (TEXT_OUTLINE_COLOR, TEXT_OUTLINE_THICKNESS),
+        (TEXT_COLOR, TEXT_THICKNESS),
+    ):
+        cv2.putText(
+            result,
+            text,
+            TEXT_ORIGIN,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            TEXT_SCALE,
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+    return Image(result)
 
 
 def draw_markers(image: Image, markers: Sequence[MarkerDetection]) -> Image:
@@ -55,7 +147,7 @@ def draw_plate_pose(
     Returns:
         Copy of the image with the plate axes.
     """
-    cos, sin = np.cos(pose.theta), np.sin(pose.theta)
+    cos, sin = np.cos(pose.heading), np.sin(pose.heading)
     origin = np.array([pose.x, pose.y])
     axes_ends = origin + AXIS_LENGTH * np.array([[cos, sin], [-sin, cos]])
     points = _plane_to_image(

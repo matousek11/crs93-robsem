@@ -14,11 +14,18 @@ uv run main.py [--real] [--robot crs93|crs97] [--no-home] [--no-view]
 | `uv run main.py --real` | Connects to the real robot and shows a warning. | Connecting to the real robot must be an explicit decision. |
 | `uv run main.py --real --robot crs97` | Connects to the real CRS97. Default is `crs93`. | Both stations are in the lab and `ctu_crs` supports both. |
 | `uv run main.py --real --no-home` | Initializes the robot without hard and soft home. | Homing is only needed after the control unit was powered off. After an emergency stop or opening the cage it is not, so we save time and unnecessary motion. |
-| `uv run main.py --real --no-view` | Runs without the camera window. | The window needs a display, e.g. over SSH there is none. |
+| `uv run main.py --real --no-view` | Runs without the camera window. The camera and the vision keep running. | The window needs a display, e.g. over SSH there is none. |
 
 ## Camera window
 
-With the real robot a window with the live camera image opens at start. When the modes are implemented, the computed results (markers, plate frame, rod, prediction) will be drawn into it. The virtual robot has no camera, so there is no window.
+With the real robot a window with the live camera image opens at start. The virtual robot has no camera, so there is no window.
+
+The window shows:
+
+- Every detected ArUco marker (`DICT_4X4_50`) with its outline and ID, also markers that do not belong to the plate. This way the IDs on the plates can be checked.
+- A status line in the top left corner, e.g. `10.0 fps | markers: 0, 1`. The frame rate is averaged over the last 10 frames and shows how many images the application really gets.
+
+The plate frame, rod and prediction will be added when they are implemented.
 
 The window is display only. Keys pressed in it do nothing, all control stays in the terminal. Closing it does not stop the robot or the application, the window does not come back until the next start.
 

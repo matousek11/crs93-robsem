@@ -1,13 +1,15 @@
-"""Background grabbing of camera images."""
+"""Background grabbing and processing of camera images."""
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from types import TracebackType
 from typing import Self
 
 from hoop_guide.hardware.interfaces import Camera
 from hoop_guide.types import Image
+from hoop_guide.vision import Frame
 
 logger = logging.getLogger(__name__)
 
@@ -15,31 +17,38 @@ JOIN_TIMEOUT = 1.0  # [s]
 
 
 class CameraStream:
-    """Grabs camera images in a background thread while used as a context.
+    """Grabs and processes camera images in a background thread.
 
-    Every new image is kept as the latest one and passed to on_image. When
-    the camera or on_image fails, the error is logged and grabbing stops.
-    The camera must not be used by anything else while the stream runs.
+    Runs while used as a context. Every image is timestamped right after
+    the grab and turned into a Frame by process. The newest Frame is kept
+    as the latest one and passed to on_frame. When the camera, process or
+    on_frame fails, the error is logged and grabbing stops. The camera must
+    not be used by anything else while the stream runs.
 
     Args:
         camera: Source of images.
-        on_image: Called with every new image, from the grabbing thread.
+        process: Turns an image and its timestamp [s] into a Frame.
+        on_frame: Called with every new Frame, from the grabbing thread.
     """
 
     def __init__(
-        self, camera: Camera, on_image: Callable[[Image], None]
+        self,
+        camera: Camera,
+        process: Callable[[Image, float], Frame],
+        on_frame: Callable[[Frame], None],
     ) -> None:
         self._camera = camera
-        self._on_image = on_image
-        self._latest: Image | None = None
+        self._process = process
+        self._on_frame = on_frame
+        self._latest: Frame | None = None
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name="camera", daemon=True
         )
 
     @property
-    def latest(self) -> Image | None:
-        """The newest image, None before the first one arrives."""
+    def latest(self) -> Frame | None:
+        """The newest Frame, None before the first one arrives."""
         return self._latest
 
     @property
@@ -69,8 +78,9 @@ class CameraStream:
         while not self._stop_event.is_set():
             try:
                 image = self._camera.grab_image()
-                self._latest = image
-                self._on_image(image)
+                frame = self._process(image, time.monotonic())
+                self._latest = frame
+                self._on_frame(frame)
             except Exception:
                 logger.exception("Camera stream failed, grabbing stopped.")
                 return
