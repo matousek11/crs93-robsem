@@ -6,6 +6,7 @@ import logging
 import signal
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Sequence
 from pathlib import Path
 
 from hoop_guide.cli import Config
@@ -40,6 +41,8 @@ class App:
         robot: Real or virtual robot.
         ui: User interface.
         run_dir: Folder with logs of this run.
+        extra_actions: Label and function of every menu item added
+            after the built in ones.
     """
 
     def __init__(
@@ -48,11 +51,13 @@ class App:
         robot: RobotControl,
         ui: UserInterface,
         run_dir: Path,
+        extra_actions: Sequence[tuple[str, Callable[[], None]]] = (),
     ) -> None:
         self._config = config
         self._robot = robot
         self._ui = ui
         self._run_dir = run_dir
+        self._extra_actions = extra_actions
         self._actions = self._build_actions()
 
     def run(self) -> None:
@@ -74,6 +79,10 @@ class App:
             ("Soft home", self._soft_home),
             ("Release", self._release),
             ("Reset motors", self._reset_motors),
+        ]
+        entries += [
+            (label, functools.partial(self._extra_action, label, action))
+            for label, action in self._extra_actions
         ]
         return {str(key): entry for key, entry in enumerate(entries, start=1)}
 
@@ -135,6 +144,13 @@ class App:
 
     def _reset_motors(self) -> None:
         self._hardware_action("Reset motors", self._robot.reset_motors)
+
+    def _extra_action(self, label: str, action: Callable[[], None]) -> None:
+        self._show(label)
+        try:
+            action()
+        except Exception:
+            self._fail(f"{label} failed.")
 
     def _hardware_action(
         self,

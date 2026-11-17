@@ -9,6 +9,9 @@ from hypothesis import given
 from hypothesis import settings
 from hypothesis import strategies as st
 
+from hoop_guide.calibration import CALIBRATION_POINT_COUNT
+from hoop_guide.calibration import HEIGHT_TOLERANCE
+from hoop_guide.calibration import CalibrationSession
 from hoop_guide.calibration import compute_reprojection_error
 from hoop_guide.calibration import estimate_homography
 from hoop_guide.calibration import load_homography
@@ -16,6 +19,8 @@ from hoop_guide.calibration import save_homography
 from hoop_guide.types import Homography
 from hoop_guide.types import PixelPoints
 from hoop_guide.types import PlanePoints
+from hoop_guide.types import Point3D
+from hoop_guide.vision import image_to_plane
 
 
 def _sample_points() -> tuple[PixelPoints, PlanePoints, Homography]:
@@ -276,3 +281,120 @@ def test_load_homography_non_finite_values(tmp_path: Path):
 
     with pytest.raises(ValueError, match="finite"):
         load_homography(file_path)
+
+
+CALIBRATION_HEIGHT = 0.05  # [m]
+METERS_PER_PIXEL = 0.001
+
+
+def _grid_point(index: int, height: float = CALIBRATION_HEIGHT):
+    """Point pair of a 3 x 3 grid, one pixel is one millimeter."""
+    column, row = index % 3, index // 3
+    image_point = (100.0 + 50.0 * column, 200.0 + 50.0 * row)
+    hoop_position = np.array(
+        [
+            0.3 + image_point[0] * METERS_PER_PIXEL,
+            -0.1 + image_point[1] * METERS_PER_PIXEL,
+            height,
+        ]
+    )
+    return image_point, hoop_position
+
+
+def _complete_session() -> CalibrationSession:
+    session = CalibrationSession()
+    for index in range(CALIBRATION_POINT_COUNT):
+        session.record(*_grid_point(index))
+    return session
+
+
+def test_new_session_has_no_points():
+    session = CalibrationSession()
+
+    assert session.point_count == 0
+    assert not session.is_complete
+
+
+def test_session_counts_recorded_points():
+    session = CalibrationSession()
+
+    session.record(*_grid_point(0))
+    session.record(*_grid_point(1))
+
+    assert session.point_count == 2
+    assert not session.is_complete
+
+
+def test_session_is_complete_after_the_last_point():
+    assert _complete_session().is_complete
+
+
+def test_session_accepts_a_height_within_the_tolerance():
+    session = CalibrationSession()
+    session.record(*_grid_point(0))
+
+    session.record(*_grid_point(1, CALIBRATION_HEIGHT + 0.5 * HEIGHT_TOLERANCE))
+
+    assert session.point_count == 2
+
+
+@pytest.mark.parametrize("direction", [1.0, -1.0], ids=["above", "below"])
+def test_session_rejects_a_height_beyond_the_tolerance(direction):
+    session = CalibrationSession()
+    session.record(*_grid_point(0))
+    height = CALIBRATION_HEIGHT + direction * 2.0 * HEIGHT_TOLERANCE
+
+    with pytest.raises(ValueError, match="differs from the first point"):
+        session.record(*_grid_point(1, height))
+
+    assert session.point_count == 1
+
+
+def test_complete_session_rejects_another_point():
+    session = _complete_session()
+
+    with pytest.raises(ValueError, match="already recorded"):
+        session.record(*_grid_point(0))
+
+    assert session.point_count == CALIBRATION_POINT_COUNT
+
+
+def test_solve_maps_the_recorded_image_points_to_the_hoop_positions():
+    image_point, hoop_position = _grid_point(4)
+
+    homography, reprojection_error = _complete_session().solve()
+
+    mapped = image_to_plane(PixelPoints(np.array([image_point])), homography)
+    np.testing.assert_allclose(mapped[0], hoop_position[:2], atol=1e-6)
+    assert reprojection_error == pytest.approx(0.0, abs=1e-6)
+
+
+def test_solve_reports_the_error_of_a_point_that_does_not_fit():
+    session = CalibrationSession()
+    for index in range(CALIBRATION_POINT_COUNT - 1):
+        session.record(*_grid_point(index))
+    image_point, hoop_position = _grid_point(CALIBRATION_POINT_COUNT - 1)
+    session.record(image_point, hoop_position + [0.02, 0.0, 0.0])
+
+    _, reprojection_error = session.solve()
+
+    assert reprojection_error > METERS_PER_PIXEL
+
+
+def test_solve_of_an_incomplete_session_raises():
+    session = CalibrationSession()
+    session.record(*_grid_point(0))
+
+    with pytest.raises(ValueError, match="points are required"):
+        session.solve()
+
+
+def test_solve_of_points_on_one_line_raises():
+    session = CalibrationSession()
+    for index in range(CALIBRATION_POINT_COUNT):
+        image_point = (100.0 + 10.0 * index, 200.0)
+        hoop_position = Point3D(np.array([0.3 + 0.01 * index, 0.1, 0.05]))
+        session.record(image_point, hoop_position)
+
+    with pytest.raises(ValueError, match="estimation failed"):
+        session.solve()

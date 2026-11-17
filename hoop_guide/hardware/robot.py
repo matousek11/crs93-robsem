@@ -1,11 +1,15 @@
 """Thin wrapper over the ctu_crs robots."""
 
+import numpy as np
 from ctu_crs import CRS93
 from ctu_crs import CRS97
+from ctu_crs.crs_robot import CRSRobot
 
 from hoop_guide.types import Image
+from hoop_guide.types import JointConfig
+from hoop_guide.types import Pose
 
-ROBOT_CLASSES = {"crs93": CRS93, "crs97": CRS97}
+ROBOT_CLASSES: dict[str, type[CRSRobot]] = {"crs93": CRS93, "crs97": CRS97}
 
 
 class VirtualRobotError(RuntimeError):
@@ -26,7 +30,9 @@ class Robot:
 
     def __init__(self, name: str, is_real: bool) -> None:
         robot_class = ROBOT_CLASSES[name]
-        self._crs = robot_class() if is_real else robot_class(tty_dev=None)
+        self._crs: CRSRobot = (
+            robot_class() if is_real else robot_class(tty_dev=None)
+        )
         self._name = name.upper()
         self._is_real = is_real
         self._is_initialized = False
@@ -75,6 +81,57 @@ class Robot:
             raise RuntimeError("Camera returned no image.")
         return Image(image)
 
+    def get_joint_angles(self) -> JointConfig:
+        """Returns the joint angles measured by the controller."""
+        self._require_real()
+        return JointConfig(np.asarray(self._crs.get_q(), dtype=np.float64))
+
+    def set_joint_angles(self, joint_config: JointConfig) -> None:
+        """Starts a coordinated move to the joint angles and returns at once.
+
+        Poll is_in_motion() to learn when the robot arrives.
+
+        Raises:
+            VirtualRobotError: The robot is virtual.
+            RuntimeError: The robot was not initialized.
+            ValueError: The joint angles are outside the joint limits, nothing
+                is sent to the controller.
+        """
+        self._require_real()
+        if not self._is_initialized:
+            raise RuntimeError(f"{self._name} is not initialized.")
+        if not self.is_in_limits(joint_config):
+            raise ValueError(f"Joint angles out of limits: {joint_config}.")
+        self._crs.move_to_q(joint_config)
+
+    def get_ik_options(self, flange_pose: Pose) -> list[JointConfig]:
+        """Returns every joint configuration that reaches the flange pose.
+
+        Joint limits are not checked, the list is empty when the pose is out
+        of reach. Options are calculated without hoop in mind.
+        """
+        return [
+            JointConfig(np.asarray(joint_config, dtype=np.float64))
+            for joint_config in self._crs.ik(flange_pose)
+        ]
+
+    def get_fk_pos(self) -> Pose:
+        """Returns the flange pose computed from the measured joint angles.
+
+        The pose is of the flange, the gripper and the hoop are not included.
+        """
+        joint_config = self.get_joint_angles()
+        return Pose(np.asarray(self._crs.fk(joint_config), dtype=np.float64))
+
+    def is_in_limits(self, joint_config: JointConfig) -> bool:
+        """Returns True if every joint angle is within its limits."""
+        return bool(self._crs.in_limits(joint_config))
+
+    def is_in_motion(self) -> bool:
+        """Returns True while the controller is still executing a move."""
+        self._require_real()
+        return bool(self._crs.in_motion())
+
     def shutdown(self) -> None:
         """Moves the robot home if initialized and closes the connection.
 
@@ -91,5 +148,6 @@ class Robot:
             self._crs.close()
 
     def _require_real(self) -> None:
+        """Checks whether current instance uses real robot."""
         if not self._is_real:
             raise VirtualRobotError(f"{self._name} is virtual.")

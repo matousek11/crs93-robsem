@@ -9,9 +9,21 @@ import numpy as np
 from hoop_guide.types import Homography
 from hoop_guide.types import PixelPoints
 from hoop_guide.types import PlanePoints
+from hoop_guide.types import Point3D
 from hoop_guide.vision import image_to_plane
 
 MIN_POINTS_FOR_HOMOGRAPHY = 4
+
+CALIBRATION_POINT_COUNT = 9
+"""Number of points recorded for one calibration."""
+
+HEIGHT_TOLERANCE = 0.01
+"""Largest difference of a point height from the first point [m]."""
+
+MAX_REPROJECTION_ERROR = 0.01
+"""Largest reprojection error of a homography worth saving [m]."""
+
+_HEIGHT_AXIS = 2
 _POINT_DIMENSION = 2
 _HOMOGRAPHY_SHAPE = (3, 3)
 _HOMOGRAPHY_DIMENSION = 3
@@ -187,3 +199,83 @@ def load_homography(path: Path | str) -> Homography:
         raise ValueError("Loaded homography values must be finite.")
 
     return Homography(matrix)
+
+
+class CalibrationSession:
+    """Collects the point pairs of one calibration.
+
+    Every pair is the hoop center in the image and the position of the hoop
+    center in the robot frame. All points have to lie in one horizontal
+    plane, the height of the first point sets it.
+    """
+
+    def __init__(self) -> None:
+        self._image_points: list[tuple[float, float]] = []
+        self._hoop_positions: list[Point3D] = []
+
+    @property
+    def point_count(self) -> int:
+        """Number of points recorded so far."""
+        return len(self._image_points)
+
+    @property
+    def is_complete(self) -> bool:
+        """True when CALIBRATION_POINT_COUNT points are recorded."""
+        return self.point_count >= CALIBRATION_POINT_COUNT
+
+    def record(
+        self, image_point: tuple[float, float], hoop_position: Point3D
+    ) -> None:
+        """Adds one point pair.
+
+        Args:
+            image_point: Hoop center in the image (u, v) [px].
+            hoop_position: Hoop center in the robot frame [m].
+
+        Raises:
+            ValueError: The session is already complete, or the height of
+                hoop_position differs from the first point by more than
+                HEIGHT_TOLERANCE. The point is not recorded.
+        """
+        if self.is_complete:
+            raise ValueError(
+                f"All {CALIBRATION_POINT_COUNT} points are already recorded."
+            )
+        height = float(hoop_position[_HEIGHT_AXIS])
+        if self._hoop_positions:
+            first_height = float(self._hoop_positions[0][_HEIGHT_AXIS])
+            if abs(height - first_height) > HEIGHT_TOLERANCE:
+                raise ValueError(
+                    f"Height {height:.3f} m differs from the first point"
+                    f" {first_height:.3f} m, point not recorded."
+                )
+        self._image_points.append(image_point)
+        self._hoop_positions.append(hoop_position)
+
+    def solve(self) -> tuple[Homography, float]:
+        """Computes the homography from the recorded points.
+
+        Returns:
+            The homography and its root-mean-square reprojection error on the
+            recorded points [m].
+
+        Raises:
+            ValueError: The session is not complete, or the points do not
+                determine a homography, e.g. they lie on one line.
+        """
+        if not self.is_complete:
+            raise ValueError(
+                f"{CALIBRATION_POINT_COUNT} points are required,"
+                f" got {self.point_count}."
+            )
+        image_points = PixelPoints(
+            np.array(self._image_points, dtype=np.float64)
+        )
+        plane_points = PlanePoints(
+            np.array(self._hoop_positions, dtype=np.float64)[:, :_HEIGHT_AXIS]
+        )
+        homography = estimate_homography(image_points, plane_points)
+        reprojection_error = compute_reprojection_error(
+            image_points, plane_points, homography
+        )
+        return homography, reprojection_error

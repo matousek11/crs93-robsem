@@ -13,11 +13,15 @@ from hoop_guide.camera_stream import CameraStream
 from hoop_guide.cli import parse_args
 from hoop_guide.estimation import fit_table_motion
 from hoop_guide.hardware.robot import Robot
+from hoop_guide.keyboard import TerminalKeyReader
 from hoop_guide.logs import LOG_FILE_NAME
 from hoop_guide.logs import setup_logging
+from hoop_guide.manual_mode import ManualMode
+from hoop_guide.planning import Planning
 from hoop_guide.plate import PlatePose
 from hoop_guide.plate import estimate_plate_pose
 from hoop_guide.types import Homography
+from hoop_guide.ui import RichManualDisplay
 from hoop_guide.ui import RichUI
 from hoop_guide.viewer.fps import FpsMeter
 from hoop_guide.viewer.overlay import render
@@ -64,10 +68,21 @@ def main() -> int:
         )
         return 1
     with contextlib.ExitStack() as stack:
+        extra_actions: list[tuple[str, Callable[[], None]]] = []
         if robot.is_real:
             on_frame = _create_frame_handler(stack, config.should_show_view)
-            stack.enter_context(CameraStream(robot, process_image, on_frame))
-        App(config, robot, ui, run_dir).run()
+            camera_stream = stack.enter_context(
+                CameraStream(robot, process_image, on_frame)
+            )
+            manual_mode = ManualMode(
+                Planning(robot),
+                camera_stream,
+                TerminalKeyReader(),
+                RichManualDisplay(),
+                DEFAULT_HOMOGRAPHY_FILE,
+            )
+            extra_actions.append(("Manual move", manual_mode.run))
+        App(config, robot, ui, run_dir, extra_actions).run()
     return 0
 
 

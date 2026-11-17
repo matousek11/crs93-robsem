@@ -72,8 +72,13 @@ class FakeUI:
         yield
 
 
-def run_app(
-    tmp_path, answers=(), is_real=True, should_home=True, failures=None
+def run_app(  # noqa: PLR0913, PLR0917
+    tmp_path,
+    answers=(),
+    is_real=True,
+    should_home=True,
+    failures=None,
+    extra_actions=(),
 ):
     log: list[tuple[str, str]] = []
     robot = FakeRobot(log, is_real=is_real, failures=failures)
@@ -84,7 +89,7 @@ def run_app(
         should_home=should_home,
         should_show_view=False,
     )
-    App(config, robot, ui, tmp_path).run()
+    App(config, robot, ui, tmp_path, extra_actions).run()
     return log, robot
 
 
@@ -222,3 +227,39 @@ def test_failed_hardware_action_shows_error_and_returns_to_menu(tmp_path):
 
     assert messages(log, "error")[0].startswith("Soft home failed.")
     assert "reset_motors" in robot_calls(log)
+
+
+EXTRA_ACTION_KEY = "9"
+
+
+def test_extra_action_is_offered_after_the_built_in_ones(tmp_path):
+    calls = []
+    extra_actions = [("Manual move", lambda: calls.append("manual move"))]
+
+    run_app(tmp_path, answers=[EXTRA_ACTION_KEY], extra_actions=extra_actions)
+
+    assert calls == ["manual move"]
+
+
+def test_without_extra_actions_their_key_is_invalid(tmp_path):
+    log, _ = run_app(tmp_path, answers=[EXTRA_ACTION_KEY])
+
+    assert f"Invalid option '{EXTRA_ACTION_KEY}'." in messages(log, "warning")
+
+
+def test_failed_extra_action_is_reported_and_the_menu_goes_on(tmp_path):
+    calls = []
+
+    def action():
+        calls.append("manual move")
+        raise RuntimeError("Check ready: error.")
+
+    log, _ = run_app(
+        tmp_path,
+        answers=[EXTRA_ACTION_KEY, EXTRA_ACTION_KEY],
+        extra_actions=[("Manual move", action)],
+    )
+
+    assert calls == ["manual move", "manual move"]
+    assert any("Manual move failed." in text for text in messages(log, "error"))
+    assert robot_calls(log)[-1] == "shutdown"
