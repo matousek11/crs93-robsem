@@ -22,7 +22,7 @@ With the real robot a window with the live camera image opens at start. The virt
 
 The window shows:
 
-- Every detected ArUco marker (`DICT_4X4_50`) with its outline and ID, also markers that do not belong to the plate. This way the IDs on the plates can be checked.
+- Every detected ArUco marker (`DICT_4X4_50`) with its outline, ID and a red dot in its top left corner, also markers that do not belong to the plate. This way the IDs on the plates can be checked.
 - A status line in the top left corner, e.g. `10.0 fps | markers: 0, 1`. The frame rate is averaged over the last 10 frames and shows how many images the application really gets.
 
 The plate frame, rod and prediction will be added when they are implemented.
@@ -53,9 +53,28 @@ Every run creates a folder `runs/<date_time>/` with `app.log`. Everything the ap
 | Soft home | Moves the robot to the home position. | Return to a known position, e.g. after stopping a mode. |
 | Release | Engages the brakes and disconnects feedback. Wait until the robot stops and do not use it above the work surface, the arm can slightly drop. | Required before entering the safety cage. |
 | Reset motors | Resets motors in an error state. | Recovery after a motor error (flashing green and red LED). |
+| Manual move | Moves the hoop from the keyboard and records calibration points, see below. Only with the real robot. | Calibration of the camera without preparing poses in advance. |
 | Quit | Same as Ctrl+C. | |
 
 Soft home, Release and Reset motors are blocked with the virtual robot, they need the controller.
+
+## Manual move
+
+The table shows the target and the current position of the hoop center in the robot frame, the number of recorded points and what happened last.
+
+| Key | What it does |
+|---|---|
+| Up, Down | Selects the row x, y, z or Exit. |
+| Left, Right | Changes the target in the selected axis by 10 mm, Right increases it. |
+| Enter | On x, y or z moves the hoop to the whole target. On Exit returns to the menu. |
+| Space | Records a calibration point: the hoop center in the newest camera image and the current position. |
+
+- The robot moves only after Enter. The hoop keeps the orientation it had when the mode started.
+- While the robot moves, keys are ignored. The move can only be stopped by the Emergency Stop button.
+- A point is refused when the camera has no image yet, the hoop is not found, or the height differs from the first point by more than 10 mm.
+- After 9 points the homography is computed. It is saved to `config/homography.json` only when its error on the 9 points is at most 10 mm, otherwise the file stays as it was. In both cases the points are dropped and counting starts again.
+- The camera window uses the new homography after the application is restarted.
+- Leaving the mode drops the recorded points.
 
 ## Keys
 

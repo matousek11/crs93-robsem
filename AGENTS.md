@@ -19,18 +19,21 @@ hoop_guide/              # main package
 ├── app.py               # application flow: startup, menu, shutdown
 ├── cli.py               # command line arguments
 ├── ui.py                # terminal UI built on rich
-├── keyboard.py          # stop key c while a mode runs
+├── keyboard.py          # single key presses from the terminal, stop key c while a mode runs
+├── manual_mode.py       # manual move of the hoop from the keyboard, recording of calibration points
 ├── logs.py              # logging, one folder per run in runs/
 ├── types.py             # shared NewTypes: Image, PixelPoints, Points3D, Homography, Pose, ...
 ├── geometry.py          # transforms, rotation about an axis
 ├── vision.py            # ArUco detection, image to table plane mapping
 ├── plate.py             # plate frame, plate pose from markers
 ├── rods.py              # rod models, centerlines from the drawings
-├── calibration.py       # calibration from point pairs
+├── calibration.py       # calibration from point pairs, collecting the pairs
 ├── estimation.py        # center of rotation, ω, phase, pose prediction
 ├── planning.py          # hoop path along the rod, handle orientation
 ├── control.py           # tracking loop, step timing
 ├── camera_stream.py     # background thread: grab, timestamp, process, keep the latest Frame
+├── models/              # physical parts the robot works with
+│   └── hoop_mount.py    # transform between the flange and the hoop center
 ├── viewer/              # camera window, runs in a separate process
 │   ├── window.py        # viewer process, latest frame queue, cv2.imshow loop
 │   ├── overlay.py       # draws markers, plate frame, rod and prediction into the image

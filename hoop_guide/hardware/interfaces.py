@@ -3,6 +3,8 @@
 from typing import Protocol
 
 from hoop_guide.types import Image
+from hoop_guide.types import JointConfig
+from hoop_guide.types import Pose
 
 
 class Camera(Protocol):
@@ -37,3 +39,34 @@ class RobotControl(Protocol):
 
     def shutdown(self) -> None:
         """Moves the robot home if initialized and closes the connection."""
+
+
+class JointMotion(Protocol):
+    """Reading and commanding the joint angles of the robot."""
+
+    def get_joint_angles(self) -> JointConfig:
+        """Returns the joint angles measured by the controller."""
+
+    def set_joint_angles(self, joint_config: JointConfig) -> None:
+        """Starts a move to the joint angles and returns at once.
+
+        Raises:
+            ValueError: The joint angles are outside the joint limits, nothing
+                is sent to the controller.
+        """
+
+    def get_ik_options(self, flange_pose: Pose) -> list[JointConfig]:
+        """Returns every joint configuration that reaches the flange pose.
+
+        Joint limits are not checked, the list is empty when the pose is out
+        of reach.
+        """
+
+    def is_in_limits(self, joint_config: JointConfig) -> bool:
+        """Returns True if every joint angle is within its limits."""
+
+    def get_fk_pos(self) -> Pose:
+        """Returns the flange pose computed from the measured joint angles."""
+
+    def is_in_motion(self) -> bool:
+        """Returns True while the controller is still executing a move."""

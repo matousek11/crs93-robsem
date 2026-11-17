@@ -6,13 +6,18 @@ import pytest
 from hoop_guide.estimation import TableMotion
 from hoop_guide.plate import PlatePose
 from hoop_guide.types import Homography
+from hoop_guide.types import Image
 from hoop_guide.types import PixelPoints
 from hoop_guide.viewer.overlay import AXIS_X_COLOR
 from hoop_guide.viewer.overlay import AXIS_Y_COLOR
+from hoop_guide.viewer.overlay import FIRST_CORNER_COLOR
+from hoop_guide.viewer.overlay import LINE_THICKNESS
 from hoop_guide.viewer.overlay import MARKER_COLOR
+from hoop_guide.viewer.overlay import REFERENCE_IMAGE_WIDTH
 from hoop_guide.viewer.overlay import TEXT_ORIGIN
 from hoop_guide.viewer.overlay import draw_markers
 from hoop_guide.viewer.overlay import draw_plate_pose
+from hoop_guide.viewer.overlay import draw_text
 from hoop_guide.viewer.overlay import render
 from hoop_guide.viewer.overlay import status_line
 from hoop_guide.vision import Frame
@@ -46,7 +51,7 @@ def test_draw_markers_outlines_marker(image):
 
     assert color_at(result, 90, 50) == MARKER_COLOR
     assert color_at(result, 90, 130) == MARKER_COLOR
-    assert color_at(result, 90, 90) == (0, 0, 0)
+    assert color_at(result, 60, 115) == (0, 0, 0)
 
 
 def test_draw_markers_without_markers_returns_same_content(image):
@@ -132,3 +137,67 @@ def test_render_includes_rotation_from_table_estimation(image):
     result = render(frame, 10.0, table_estimation=motion)
 
     assert result[: TEXT_ORIGIN[1], : TEXT_ORIGIN[1] * 3].any()
+
+
+SIZE_SCALE = 3
+WIDE_IMAGE_WIDTH = SIZE_SCALE * REFERENCE_IMAGE_WIDTH
+
+
+def reference_image():
+    return Image(np.zeros((480, REFERENCE_IMAGE_WIDTH, 3), dtype=np.uint8))
+
+
+def wide_image():
+    return Image(np.zeros((1200, WIDE_IMAGE_WIDTH, 3), dtype=np.uint8))
+
+
+def drawn_rows(image):
+    """Number of image rows with at least one pixel that is not black."""
+    return int(np.count_nonzero(image.any(axis=(1, 2))))
+
+
+def test_draw_markers_marks_the_first_corner(image):
+    result = draw_markers(image, [marker(7, 50, 50, 80)])
+
+    assert color_at(result, 50, 50) == FIRST_CORNER_COLOR
+    assert color_at(result, 130, 130) == MARKER_COLOR
+
+
+def test_draw_markers_writes_the_id_in_the_middle_of_the_marker(image):
+    without_id = draw_markers(image, [])
+
+    result = draw_markers(image, [marker(7, 50, 50, 80)])
+
+    middle = result[80:100, 80:100]
+    assert (middle != without_id[80:100, 80:100]).any()
+
+
+def test_marker_outline_is_thicker_in_a_wider_image():
+    inside_outline = LINE_THICKNESS  # [px] from the middle of the line
+    reference = reference_image()
+
+    in_reference = draw_markers(reference, [marker(7, 100, 100, 300)])
+    in_wide = draw_markers(wide_image(), [marker(7, 100, 100, 300)])
+
+    assert color_at(in_reference, 250, 100 + inside_outline) == (0, 0, 0)
+    assert color_at(in_wide, 250, 100 + inside_outline) == MARKER_COLOR
+
+
+def test_text_grows_with_the_image_width():
+    reference = reference_image()
+
+    rows_in_reference = drawn_rows(draw_text(reference, "10.0 fps"))
+    rows_in_wide = drawn_rows(draw_text(wide_image(), "10.0 fps"))
+
+    assert rows_in_wide == pytest.approx(
+        SIZE_SCALE * rows_in_reference, rel=0.2
+    )
+
+
+def test_sizes_do_not_shrink_in_a_narrower_image(image):
+    reference = reference_image()
+
+    rows_in_narrow = drawn_rows(draw_text(image, "10"))
+    rows_in_reference = drawn_rows(draw_text(reference, "10"))
+
+    assert rows_in_narrow == rows_in_reference

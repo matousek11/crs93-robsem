@@ -6,11 +6,26 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
+from types import TracebackType
 from typing import Protocol
+from typing import Self
 
 from rich.console import Console
+from rich.console import Group
+from rich.console import RenderableType
+from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
+
+from hoop_guide.calibration import CALIBRATION_POINT_COUNT
+from hoop_guide.manual_mode import ManualRow
+from hoop_guide.manual_mode import ManualView
+
+MANUAL_MODE_KEYS = (
+    "Up/Down row   Left/Right value   Enter move or exit   Space record point"
+)
+_AXIS_ROWS = (ManualRow.X, ManualRow.Y, ManualRow.Z)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -115,3 +130,65 @@ class RichUI:
         """Shows the message with a spinner while the block runs."""
         with self._console.status(message):
             yield
+
+
+class RichManualDisplay:
+    """Manual move table in the terminal, redrawn in place.
+
+    The table is on the screen while the display is used as a context.
+    """
+
+    def __init__(self) -> None:
+        self._live = Live(console=Console(), auto_refresh=False)
+
+    def __enter__(self) -> Self:
+        """Starts drawing the table."""
+        self._live.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Stops drawing the table and leaves its last state on the screen."""
+        self._live.stop()
+
+    def show(self, view: ManualView) -> None:
+        """Redraws the table."""
+        self._live.update(_render_manual_view(view), refresh=True)
+
+
+def _render_manual_view(view: ManualView) -> RenderableType:
+    table = Table.grid(padding=(0, 3))
+    table.add_row("", "", "target [m]", "current [m]", style="dim")
+    for row in _AXIS_ROWS:
+        table.add_row(
+            _selection_mark(view, row),
+            row.name.lower(),
+            f"{view.state.target_position[row.value]:.3f}",
+            f"{view.current_position[row.value]:.3f}",
+            style=_row_style(view, row),
+        )
+    table.add_row(
+        _selection_mark(view, ManualRow.EXIT),
+        "Exit",
+        style=_row_style(view, ManualRow.EXIT),
+    )
+    points = f"points {view.recorded_points}/{CALIBRATION_POINT_COUNT}"
+    content = Group(
+        table,
+        Text(""),
+        Text(view.message),
+        Text(MANUAL_MODE_KEYS, style="dim"),
+    )
+    return Panel(content, title=f"Manual move   {points}", expand=False)
+
+
+def _selection_mark(view: ManualView, row: ManualRow) -> str:
+    return ">" if view.state.selected_row is row else " "
+
+
+def _row_style(view: ManualView, row: ManualRow) -> str:
+    return "bold" if view.state.selected_row is row else ""
