@@ -22,7 +22,7 @@ With the real robot a window with the live camera image opens at start. The virt
 
 The window shows:
 
-- Every detected ArUco marker (`DICT_4X4_50`) with its outline and ID, also markers that do not belong to the plate. This way the IDs on the plates can be checked.
+- Every detected ArUco marker (`DICT_4X4_50`) with its outline, ID and a red dot in its top left corner, also markers that do not belong to the plate. This way the IDs on the plates can be checked.
 - A status line in the top left corner, e.g. `10.0 fps | markers: 0, 1`. The frame rate is averaged over the last 10 frames and shows how many images the application really gets.
 
 The plate frame, rod and prediction will be added when they are implemented.
