@@ -60,18 +60,18 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 
 ## Manual move
 
-The table shows the target and the current position of the hoop center in the robot frame, the target and the current rotation of the hoop, the number of recorded points and what happened last.
+The table shows the target and the current position of the hoop center in the robot frame, how far the hoop was turned, the target and the current direction of the hoop axes, the number of recorded points and what happened last.
 
 | Key | What it does |
 |---|---|
 | Up, Down | Selects the row x, y, z, rotation x, rotation y, rotation z or Exit. |
-| Left, Right | Changes the target position in the selected axis by 10 mm or the selected target rotation by 5°, Right increases it. |
+| Left, Right | Changes the target position in the selected axis by 10 mm, Right increases it. On a rotation row turns the target by 5° about that axis of the robot frame, Right counterclockwise when viewed against the axis. |
 | Enter | On a position or rotation row moves the hoop to the whole target. On Exit returns to the menu. |
 | Space | Records a calibration point: the hoop center in the newest camera image and the current position. |
 
 - The robot moves only after Enter. The target starts at the pose the hoop had when the mode started.
-- The rotations are angles about the x, y and z axis of the robot frame, applied in this order. With rotation y at 0° the flange points up, at 90° forward along x as in the home position, at 180° down.
-- The same orientation can be written with other angles, so the current rotation can show other numbers than the target, e.g. 180°, 0°, 180° for the target 0°, 180°, 0°.
+- Every rotation row turns the hoop about an axis of the robot frame that goes through the hoop center, whatever the orientation of the hoop is. From the home position, where the flange points forward along x, 90° on rotation y points it down.
+- The turned column sums the key presses on each row since the mode started. The orientation itself is shown by the hoop z and x axis, written as directions in the robot frame, e.g. 0.00 0.00 -1.00 for a hoop z axis that points down.
 - While the robot moves, keys are ignored. The move can only be stopped by the Emergency Stop button.
 - A point is refused when the camera has no image yet, the hoop is not found, or the height differs from the first point by more than 10 mm.
 - After 9 points the homography is computed. It is saved to `config/homography.json` only when its error on the 9 points is at most 10 mm, otherwise the file stays as it was. In both cases the points are dropped and counting starts again.

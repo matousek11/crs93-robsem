@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.console import Group
 from rich.console import RenderableType
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -24,6 +25,10 @@ from hoop_guide.manual_mode import POSITION_ROWS
 from hoop_guide.manual_mode import ROTATION_ROWS
 from hoop_guide.manual_mode import ManualRow
 from hoop_guide.manual_mode import ManualView
+from hoop_guide.types import RotationMatrix
+
+# The z axis is the one the hoop is pushed along, x tells the turn about it.
+_SHOWN_HOOP_AXES = ((2, "z"), (0, "x"))
 
 MANUAL_MODE_KEYS = (
     "Up/Down row   Left/Right value   Enter move or exit   Space record point"
@@ -164,7 +169,9 @@ class RichManualDisplay:
 
 def _render_manual_view(view: ManualView) -> RenderableType:
     table = Table.grid(padding=(0, 3))
-    table.add_row("", "", "target [m]", "current [m]", style="dim")
+    table.add_row(
+        "", "", escape("target [m]"), escape("current [m]"), style="dim"
+    )
     for axis_index, row in enumerate(POSITION_ROWS):
         table.add_row(
             _selection_mark(view, row),
@@ -173,15 +180,12 @@ def _render_manual_view(view: ManualView) -> RenderableType:
             f"{view.current_position[axis_index]:.3f}",
             style=_row_style(view, row),
         )
-    table.add_row("", "", "target [deg]", "current [deg]", style="dim")
+    table.add_row("", "", escape("turned [deg]"), style="dim")
     for axis_index, row in enumerate(ROTATION_ROWS):
-        target_angle = view.state.target_rotation_angles[axis_index]
-        current_angle = view.current_rotation_angles[axis_index]
         table.add_row(
             _selection_mark(view, row),
             row.value,
-            f"{math.degrees(target_angle):.1f}",
-            f"{math.degrees(current_angle):.1f}",
+            f"{math.degrees(view.state.turned_angles[axis_index]):.1f}",
             style=_row_style(view, row),
         )
     table.add_row(
@@ -189,6 +193,14 @@ def _render_manual_view(view: ManualView) -> RenderableType:
         "Exit",
         style=_row_style(view, ManualRow.EXIT),
     )
+    table.add_row("", "", "target", "current", style="dim")
+    for hoop_axis_index, hoop_axis_name in _SHOWN_HOOP_AXES:
+        table.add_row(
+            "",
+            f"hoop {hoop_axis_name} axis",
+            _format_hoop_axis(view.state.target_rotation, hoop_axis_index),
+            _format_hoop_axis(view.current_rotation, hoop_axis_index),
+        )
     points = f"points {view.recorded_points}/{CALIBRATION_POINT_COUNT}"
     content = Group(
         table,
@@ -197,6 +209,13 @@ def _render_manual_view(view: ManualView) -> RenderableType:
         Text(MANUAL_MODE_KEYS, style="dim"),
     )
     return Panel(content, title=f"Manual move   {points}", expand=False)
+
+
+def _format_hoop_axis(rotation: RotationMatrix, hoop_axis_index: int) -> str:
+    """Formats the direction of one hoop axis in the robot frame."""
+    # Adding zero turns -0.0 into 0.0, so no "-0.00" is shown.
+    x, y, z = rotation[:, hoop_axis_index].round(2) + 0.0
+    return f"{x:5.2f} {y:5.2f} {z:5.2f}"
 
 
 def _selection_mark(view: ManualView, row: ManualRow) -> str:

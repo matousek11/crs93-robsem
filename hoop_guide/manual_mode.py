@@ -16,14 +16,13 @@ from hoop_guide.calibration import CALIBRATION_POINT_COUNT
 from hoop_guide.calibration import MAX_REPROJECTION_ERROR
 from hoop_guide.calibration import CalibrationSession
 from hoop_guide.calibration import save_homography
-from hoop_guide.geometry import angles_from_rotation
-from hoop_guide.geometry import rotation_from_angles
+from hoop_guide.geometry import rotation_about_axis
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.types import Point3D
 from hoop_guide.types import Pose
-from hoop_guide.types import RotationAngles
 from hoop_guide.types import RotationMatrix
+from hoop_guide.types import TurnAngles
 from hoop_guide.vision import Frame
 from hoop_guide.vision import detect_hoop_center
 
@@ -33,7 +32,7 @@ MANUAL_STEP = 0.01
 """Change of the target position by one arrow key press [m]."""
 
 MANUAL_ROTATION_STEP = math.radians(5.0)
-"""Change of a target rotation angle by one arrow key press [rad]."""
+"""Turn of the target orientation by one arrow key press [rad]."""
 
 MOTION_POLL_PERIOD = 0.05
 """Time between two questions whether the robot still moves [s]."""
@@ -69,7 +68,7 @@ ROTATION_ROWS = (
     ManualRow.ROTATION_Y,
     ManualRow.ROTATION_Z,
 )
-"""Rows of the target rotation angles, in the order of their axes."""
+"""Rows that turn the target orientation, in the order of the robot axes."""
 
 _ROWS = tuple(ManualRow)
 _ROW_OFFSET_BY_KEY = {Key.UP: -1, Key.DOWN: 1}
@@ -84,13 +83,17 @@ class ManualState:
         selected_row: Row the arrow keys and Enter act on.
         target_position: Position of the hoop center the robot moves to on
             Enter, not sent to the robot yet.
-        target_rotation_angles: Orientation of the hoop the robot moves to
-            on Enter, not sent to the robot yet.
+        target_rotation: Orientation of the hoop the robot moves to on
+            Enter, not sent to the robot yet.
+        turned_angles: Sum of the turns about each robot axis the operator
+            has asked for since the mode started. Shown to count the key
+            presses, the orientation is in target_rotation.
     """
 
     selected_row: ManualRow
     target_position: Point3D
-    target_rotation_angles: RotationAngles
+    target_rotation: RotationMatrix
+    turned_angles: TurnAngles
 
     def handle_key(
         self, key: Key
@@ -99,8 +102,10 @@ class ManualState:
 
         Up and down select the neighbouring row and stop at the first and
         the last one. Left and right change the selected axis of the target
-        position by MANUAL_STEP or the selected target rotation angle by
-        MANUAL_ROTATION_STEP, right increases it. Enter asks for a move to
+        position by MANUAL_STEP, right increases it. On a rotation row they
+        turn the target orientation by MANUAL_ROTATION_STEP about that axis
+        of the robot frame, right counterclockwise when viewed against the
+        axis. Enter asks for a move to
         the whole target, on the Exit row it asks to leave. Space asks to
         record a calibration point.
 
@@ -135,12 +140,17 @@ class ManualState:
                 self, target_position=Point3D(target_position)
             )
         if self.selected_row in ROTATION_ROWS:
-            target_rotation_angles = self.target_rotation_angles.copy()
             axis_index = ROTATION_ROWS.index(self.selected_row)
-            target_rotation_angles[axis_index] += sign * MANUAL_ROTATION_STEP
+            turn_angle = sign * MANUAL_ROTATION_STEP
+            turned_angles = self.turned_angles.copy()
+            turned_angles[axis_index] += turn_angle
             return dataclasses.replace(
                 self,
-                target_rotation_angles=RotationAngles(target_rotation_angles),
+                target_rotation=RotationMatrix(
+                    rotation_about_axis(axis_index, turn_angle)
+                    @ self.target_rotation
+                ),
+                turned_angles=TurnAngles(turned_angles),
             )
         return self
 
@@ -150,19 +160,18 @@ class ManualView:
     """Everything the manual move table shows.
 
     Attributes:
-        state: Selected row, target position and target rotation angles.
+        state: Selected row, target position and target orientation.
         current_position: Position of the hoop center measured after the
             last move.
-        current_rotation_angles: Orientation of the hoop measured after the
-            last move. The same orientation can have other angles than the
-            target, see angles_from_rotation.
+        current_rotation: Orientation of the hoop measured after the last
+            move.
         recorded_points: Number of calibration points recorded so far.
         message: What happened last, empty when nothing did.
     """
 
     state: ManualState
     current_position: Point3D
-    current_rotation_angles: RotationAngles
+    current_rotation: RotationMatrix
     recorded_points: int
     message: str
 
@@ -270,7 +279,8 @@ class ManualMode:
             state = ManualState(
                 ManualRow.X,
                 _get_position(current_hoop_pose),
-                _get_rotation_angles(current_hoop_pose),
+                _get_rotation(current_hoop_pose),
+                TurnAngles(np.zeros(len(ROTATION_ROWS))),
             )
             session = CalibrationSession()
             message = ""
@@ -278,7 +288,7 @@ class ManualMode:
                 view = ManualView(
                     state,
                     _get_position(current_hoop_pose),
-                    _get_rotation_angles(current_hoop_pose),
+                    _get_rotation(current_hoop_pose),
                     session.point_count,
                     message,
                 )
@@ -361,15 +371,13 @@ def _get_position(hoop_pose: Pose) -> Point3D:
     return Point3D(hoop_pose[:3, 3].copy())
 
 
-def _get_rotation_angles(hoop_pose: Pose) -> RotationAngles:
-    return angles_from_rotation(RotationMatrix(hoop_pose[:3, :3]))
+def _get_rotation(hoop_pose: Pose) -> RotationMatrix:
+    return RotationMatrix(hoop_pose[:3, :3].copy())
 
 
 def _get_target_hoop_pose(state: ManualState) -> Pose:
     target_hoop_pose = Pose(np.eye(4))
-    target_hoop_pose[:3, :3] = rotation_from_angles(
-        state.target_rotation_angles
-    )
+    target_hoop_pose[:3, :3] = state.target_rotation
     target_hoop_pose[:3, 3] = state.target_position
     return target_hoop_pose
 

@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import cv2
@@ -6,7 +7,7 @@ import pytest
 
 from hoop_guide.calibration import CALIBRATION_POINT_COUNT
 from hoop_guide.calibration import load_homography
-from hoop_guide.geometry import rotation_from_angles
+from hoop_guide.geometry import rotation_about_axis
 from hoop_guide.keyboard import Key
 from hoop_guide.manual_mode import MANUAL_ROTATION_STEP
 from hoop_guide.manual_mode import MANUAL_STEP
@@ -17,12 +18,18 @@ from hoop_guide.manual_mode import ManualState
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.types import PixelPoints
 from hoop_guide.types import Point3D
-from hoop_guide.types import RotationAngles
+from hoop_guide.types import RotationMatrix
+from hoop_guide.types import TurnAngles
 from hoop_guide.vision import Frame
 from hoop_guide.vision import image_to_plane
 
 START_POSITION = (0.4, 0.0, 0.05)
-START_ROTATION_ANGLES = (0.0, 0.0, math.pi / 2)
+# Hoop turned by a quarter turn about z, to see that it is kept.
+START_ROTATION = rotation_about_axis(2, math.pi / 2)
+# The flange points forward along the robot x axis.
+HOME_ROTATION = rotation_about_axis(1, math.pi / 2)
+X_AXIS = (1.0, 0.0, 0.0)
+Z_AXIS = (0.0, 0.0, 1.0)
 PIXELS_PER_METER = 4000.0
 START_PIXEL = 200.0
 IMAGE_SIZE = 800
@@ -37,18 +44,14 @@ def make_state(row=ManualRow.X):
     return ManualState(
         row,
         Point3D(np.array(START_POSITION)),
-        RotationAngles(np.array(START_ROTATION_ANGLES)),
+        RotationMatrix(START_ROTATION.copy()),
+        TurnAngles(np.zeros(3)),
     )
 
 
-def make_hoop_pose(
-    position=START_POSITION, rotation_angles=START_ROTATION_ANGLES
-):
-    # By default turned by a quarter turn about z, to see that it is kept.
+def make_hoop_pose(position=START_POSITION, rotation=START_ROTATION):
     hoop_pose = np.eye(4)
-    hoop_pose[:3, :3] = rotation_from_angles(
-        RotationAngles(np.array(rotation_angles))
-    )
+    hoop_pose[:3, :3] = rotation
     hoop_pose[:3, 3] = position
     return hoop_pose
 
@@ -245,9 +248,7 @@ def test_up_and_down_select_the_neighbouring_row(row, key, expected_row):
     assert state.selected_row is expected_row
     assert command is None
     np.testing.assert_allclose(state.target_position, START_POSITION)
-    np.testing.assert_allclose(
-        state.target_rotation_angles, START_ROTATION_ANGLES
-    )
+    np.testing.assert_allclose(state.target_rotation, START_ROTATION)
 
 
 @pytest.mark.parametrize(
@@ -273,28 +274,66 @@ def test_left_and_right_change_the_selected_axis(row, key, expected_change):
 
 
 @pytest.mark.parametrize(
-    ("row", "key", "expected_change"),
+    ("row", "key", "axis_index", "turn_angle"),
     [
-        (ManualRow.ROTATION_X, Key.RIGHT, (MANUAL_ROTATION_STEP, 0.0, 0.0)),
-        (ManualRow.ROTATION_X, Key.LEFT, (-MANUAL_ROTATION_STEP, 0.0, 0.0)),
-        (ManualRow.ROTATION_Y, Key.RIGHT, (0.0, MANUAL_ROTATION_STEP, 0.0)),
-        (ManualRow.ROTATION_Z, Key.LEFT, (0.0, 0.0, -MANUAL_ROTATION_STEP)),
-        (ManualRow.X, Key.RIGHT, (0.0, 0.0, 0.0)),
-        (ManualRow.EXIT, Key.RIGHT, (0.0, 0.0, 0.0)),
+        (ManualRow.ROTATION_X, Key.RIGHT, 0, MANUAL_ROTATION_STEP),
+        (ManualRow.ROTATION_X, Key.LEFT, 0, -MANUAL_ROTATION_STEP),
+        (ManualRow.ROTATION_Y, Key.RIGHT, 1, MANUAL_ROTATION_STEP),
+        (ManualRow.ROTATION_Z, Key.LEFT, 2, -MANUAL_ROTATION_STEP),
     ],
-    ids=["x_right", "x_left", "y_right", "z_left", "position_row", "exit_row"],
+    ids=["x_right", "x_left", "y_right", "z_left"],
 )
-def test_left_and_right_change_the_selected_rotation_angle(
-    row, key, expected_change
+def test_left_and_right_turn_the_target_about_the_selected_robot_axis(
+    row, key, axis_index, turn_angle
 ):
     state, command = make_state(row).handle_key(key)
 
+    # Turn about the robot axis is multiplied from the left.
     np.testing.assert_allclose(
-        state.target_rotation_angles,
-        np.add(START_ROTATION_ANGLES, expected_change),
+        state.target_rotation,
+        rotation_about_axis(axis_index, turn_angle) @ START_ROTATION,
+        atol=1e-12,
     )
+    expected_turned_angles = np.zeros(3)
+    expected_turned_angles[axis_index] = turn_angle
+    np.testing.assert_allclose(state.turned_angles, expected_turned_angles)
+    np.testing.assert_allclose(state.target_position, START_POSITION)
     assert state.selected_row is row
     assert command is None
+
+
+@pytest.mark.parametrize(
+    "row", [ManualRow.X, ManualRow.EXIT], ids=["position_row", "exit_row"]
+)
+def test_left_and_right_on_other_rows_keep_the_target_orientation(row):
+    state, _ = make_state(row).handle_key(Key.RIGHT)
+
+    np.testing.assert_allclose(state.target_rotation, START_ROTATION)
+    np.testing.assert_allclose(state.turned_angles, np.zeros(3))
+
+
+def test_rotation_x_and_z_turn_about_different_axes_in_home_orientation():
+    # Reproduces the gimbal lock of three composed angles, where both rows
+    # turned the hoop about the vertical axis.
+    home_state = dataclasses.replace(
+        make_state(), target_rotation=RotationMatrix(HOME_ROTATION.copy())
+    )
+    turned_about_x, _ = dataclasses.replace(
+        home_state, selected_row=ManualRow.ROTATION_X
+    ).handle_key(Key.RIGHT)
+    turned_about_z, _ = dataclasses.replace(
+        home_state, selected_row=ManualRow.ROTATION_Z
+    ).handle_key(Key.RIGHT)
+
+    # In home the hoop z axis lies on the robot x axis.
+    np.testing.assert_allclose(
+        turned_about_x.target_rotation @ Z_AXIS, X_AXIS, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        turned_about_z.target_rotation @ Z_AXIS,
+        (math.cos(MANUAL_ROTATION_STEP), math.sin(MANUAL_ROTATION_STEP), 0.0),
+        atol=1e-12,
+    )
 
 
 @pytest.mark.parametrize(
@@ -306,9 +345,8 @@ def test_changing_the_target_keeps_the_previous_state(row):
     previous_state.handle_key(Key.RIGHT)
 
     np.testing.assert_allclose(previous_state.target_position, START_POSITION)
-    np.testing.assert_allclose(
-        previous_state.target_rotation_angles, START_ROTATION_ANGLES
-    )
+    np.testing.assert_allclose(previous_state.target_rotation, START_ROTATION)
+    np.testing.assert_allclose(previous_state.turned_angles, np.zeros(3))
 
 
 @pytest.mark.parametrize(
@@ -349,12 +387,9 @@ def test_first_view_shows_the_measured_pose_as_target_and_current(tmp_path):
     assert view.state.selected_row is ManualRow.X
     np.testing.assert_allclose(view.state.target_position, START_POSITION)
     np.testing.assert_allclose(view.current_position, START_POSITION)
-    np.testing.assert_allclose(
-        view.state.target_rotation_angles, START_ROTATION_ANGLES, atol=1e-12
-    )
-    np.testing.assert_allclose(
-        view.current_rotation_angles, START_ROTATION_ANGLES, atol=1e-12
-    )
+    np.testing.assert_allclose(view.state.target_rotation, START_ROTATION)
+    np.testing.assert_allclose(view.current_rotation, START_ROTATION)
+    np.testing.assert_allclose(view.state.turned_angles, np.zeros(3))
     assert view.recorded_points == 0
     assert not view.message
 
@@ -394,50 +429,41 @@ def test_enter_moves_the_hoop_to_the_whole_target_and_keeps_orientation(
     )
 
 
-def test_enter_turns_the_hoop_to_the_target_angles_and_keeps_position(
+def test_enter_turns_the_hoop_about_the_robot_axis_and_keeps_position(
     tmp_path,
 ):
     keys = [*TO_ROTATION_Y_KEYS, Key.RIGHT, Key.RIGHT, Key.ENTER]
 
     motion, _, display, _ = run_mode(tmp_path, keys)
 
-    expected_angles = np.add(
-        START_ROTATION_ANGLES, (0.0, 2 * MANUAL_ROTATION_STEP, 0.0)
+    expected_rotation = (
+        rotation_about_axis(1, 2 * MANUAL_ROTATION_STEP) @ START_ROTATION
     )
     assert len(motion.moves) == 1
     np.testing.assert_allclose(
         motion.moves[0],
-        make_hoop_pose(rotation_angles=expected_angles),
+        make_hoop_pose(rotation=expected_rotation),
         atol=1e-12,
     )
+    view = display.views[-1]
     np.testing.assert_allclose(
-        display.views[-1].current_rotation_angles, expected_angles, atol=1e-12
+        view.current_rotation, expected_rotation, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        view.state.turned_angles, (0.0, 2 * MANUAL_ROTATION_STEP, 0.0)
     )
 
 
-def test_half_turn_about_y_from_flange_up_points_the_hoop_down(tmp_path):
+def test_quarter_turn_about_y_from_home_points_the_hoop_down(tmp_path):
     motion = FakeMotion()
-    motion.hoop_pose = make_hoop_pose(rotation_angles=(0.0, 0.0, 0.0))
-    half_turn_steps = round(math.pi / MANUAL_ROTATION_STEP)
-    keys = [*TO_ROTATION_Y_KEYS, *[Key.RIGHT] * half_turn_steps, Key.ENTER]
+    motion.hoop_pose = make_hoop_pose(rotation=HOME_ROTATION)
+    quarter_turn_steps = round(math.pi / 2 / MANUAL_ROTATION_STEP)
+    keys = [*TO_ROTATION_Y_KEYS, *[Key.RIGHT] * quarter_turn_steps, Key.ENTER]
 
     run_mode(tmp_path, keys, motion)
 
     np.testing.assert_allclose(
         motion.moves[0][:3, 2], (0.0, 0.0, -1.0), atol=1e-12
-    )
-
-
-def test_move_without_an_edit_keeps_an_orientation_in_gimbal_lock(tmp_path):
-    # Home orientation of the robot, the flange points forward along x.
-    motion = FakeMotion()
-    motion.hoop_pose = make_hoop_pose(rotation_angles=(0.3, math.pi / 2, 0.0))
-    start_rotation = motion.hoop_pose[:3, :3].copy()
-
-    run_mode(tmp_path, [Key.ENTER], motion)
-
-    np.testing.assert_allclose(
-        motion.moves[0][:3, :3], start_rotation, atol=1e-12
     )
 
 
