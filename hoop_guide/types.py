@@ -35,3 +35,14 @@ JointConfig = NewType("JointConfig", NDArray[np.float64])
 
 Point3D = NewType("Point3D", NDArray[np.float64])
 """One point in the robot frame, shape (3,), meters."""
+
+RotationMatrix = NewType("RotationMatrix", NDArray[np.float64])
+"""Orientation in the robot frame, shape (3, 3), the rotation part of a Pose."""
+
+RotationAngles = NewType("RotationAngles", NDArray[np.float64])
+"""Angles about the x, y and z axis of the robot frame, shape (3,), rad.
+
+The rotation about x is applied first and the one about z last, so the
+rotation matrix is Rz @ Ry @ Rx. Positive angles are counterclockwise when
+viewed against the axis.
+"""

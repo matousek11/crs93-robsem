@@ -3,20 +3,27 @@
 import dataclasses
 import enum
 import logging
+import math
 import time
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol
 from typing import Self
 
+import numpy as np
+
 from hoop_guide.calibration import CALIBRATION_POINT_COUNT
 from hoop_guide.calibration import MAX_REPROJECTION_ERROR
 from hoop_guide.calibration import CalibrationSession
 from hoop_guide.calibration import save_homography
+from hoop_guide.geometry import angles_from_rotation
+from hoop_guide.geometry import rotation_from_angles
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.types import Point3D
 from hoop_guide.types import Pose
+from hoop_guide.types import RotationAngles
+from hoop_guide.types import RotationMatrix
 from hoop_guide.vision import Frame
 from hoop_guide.vision import detect_hoop_center
 
@@ -25,6 +32,9 @@ logger = logging.getLogger(__name__)
 MANUAL_STEP = 0.01
 """Change of the target position by one arrow key press [m]."""
 
+MANUAL_ROTATION_STEP = math.radians(5.0)
+"""Change of a target rotation angle by one arrow key press [rad]."""
+
 MOTION_POLL_PERIOD = 0.05
 """Time between two questions whether the robot still moves [s]."""
 
@@ -32,15 +42,15 @@ _MILLIMETERS_PER_METER = 1000.0
 
 
 class ManualRow(enum.Enum):
-    """Rows of the manual move table.
+    """Rows of the manual move table, from the top to the bottom."""
 
-    The value of an axis row is the index of that axis in a position.
-    """
-
-    X = 0
-    Y = 1
-    Z = 2
-    EXIT = 3
+    X = "x"
+    Y = "y"
+    Z = "z"
+    ROTATION_X = "rotation x"
+    ROTATION_Y = "rotation y"
+    ROTATION_Z = "rotation z"
+    EXIT = "exit"
 
 
 class ManualCommand(enum.Enum):
@@ -51,9 +61,19 @@ class ManualCommand(enum.Enum):
     EXIT = "exit"
 
 
+POSITION_ROWS = (ManualRow.X, ManualRow.Y, ManualRow.Z)
+"""Rows of the target position, in the order of its axes."""
+
+ROTATION_ROWS = (
+    ManualRow.ROTATION_X,
+    ManualRow.ROTATION_Y,
+    ManualRow.ROTATION_Z,
+)
+"""Rows of the target rotation angles, in the order of their axes."""
+
 _ROWS = tuple(ManualRow)
 _ROW_OFFSET_BY_KEY = {Key.UP: -1, Key.DOWN: 1}
-_TARGET_CHANGE_BY_KEY = {Key.LEFT: -MANUAL_STEP, Key.RIGHT: MANUAL_STEP}
+_TARGET_CHANGE_SIGN_BY_KEY = {Key.LEFT: -1.0, Key.RIGHT: 1.0}
 
 
 @dataclasses.dataclass(frozen=True, eq=False)
@@ -64,10 +84,13 @@ class ManualState:
         selected_row: Row the arrow keys and Enter act on.
         target_position: Position of the hoop center the robot moves to on
             Enter, not sent to the robot yet.
+        target_rotation_angles: Orientation of the hoop the robot moves to
+            on Enter, not sent to the robot yet.
     """
 
     selected_row: ManualRow
     target_position: Point3D
+    target_rotation_angles: RotationAngles
 
     def handle_key(
         self, key: Key
@@ -76,9 +99,10 @@ class ManualState:
 
         Up and down select the neighbouring row and stop at the first and
         the last one. Left and right change the selected axis of the target
-        position by MANUAL_STEP, right increases it. Enter asks for a move to
-        the whole target position, on the Exit row it asks to leave. Space
-        asks to record a calibration point.
+        position by MANUAL_STEP or the selected target rotation angle by
+        MANUAL_ROTATION_STEP, right increases it. Enter asks for a move to
+        the whole target, on the Exit row it asks to leave. Space asks to
+        record a calibration point.
 
         Args:
             key: Pressed key.
@@ -89,8 +113,8 @@ class ManualState:
         """
         if key in _ROW_OFFSET_BY_KEY:
             return self._select_neighbour(_ROW_OFFSET_BY_KEY[key]), None
-        if key in _TARGET_CHANGE_BY_KEY:
-            return self._change_target(_TARGET_CHANGE_BY_KEY[key]), None
+        if key in _TARGET_CHANGE_SIGN_BY_KEY:
+            return self._change_target(_TARGET_CHANGE_SIGN_BY_KEY[key]), None
         if key is Key.SPACE:
             return self, ManualCommand.RECORD
         if self.selected_row is ManualRow.EXIT:
@@ -102,14 +126,23 @@ class ManualState:
         row_index = min(max(row_index, 0), len(_ROWS) - 1)
         return dataclasses.replace(self, selected_row=_ROWS[row_index])
 
-    def _change_target(self, change: float) -> "ManualState":
-        if self.selected_row is ManualRow.EXIT:
-            return self
-        target_position = self.target_position.copy()
-        target_position[self.selected_row.value] += change
-        return dataclasses.replace(
-            self, target_position=Point3D(target_position)
-        )
+    def _change_target(self, sign: float) -> "ManualState":
+        if self.selected_row in POSITION_ROWS:
+            target_position = self.target_position.copy()
+            axis_index = POSITION_ROWS.index(self.selected_row)
+            target_position[axis_index] += sign * MANUAL_STEP
+            return dataclasses.replace(
+                self, target_position=Point3D(target_position)
+            )
+        if self.selected_row in ROTATION_ROWS:
+            target_rotation_angles = self.target_rotation_angles.copy()
+            axis_index = ROTATION_ROWS.index(self.selected_row)
+            target_rotation_angles[axis_index] += sign * MANUAL_ROTATION_STEP
+            return dataclasses.replace(
+                self,
+                target_rotation_angles=RotationAngles(target_rotation_angles),
+            )
+        return self
 
 
 @dataclasses.dataclass(frozen=True, eq=False)
@@ -117,15 +150,19 @@ class ManualView:
     """Everything the manual move table shows.
 
     Attributes:
-        state: Selected row and target position.
+        state: Selected row, target position and target rotation angles.
         current_position: Position of the hoop center measured after the
             last move.
+        current_rotation_angles: Orientation of the hoop measured after the
+            last move. The same orientation can have other angles than the
+            target, see angles_from_rotation.
         recorded_points: Number of calibration points recorded so far.
         message: What happened last, empty when nothing did.
     """
 
     state: ManualState
     current_position: Point3D
+    current_rotation_angles: RotationAngles
     recorded_points: int
     message: str
 
@@ -198,10 +235,10 @@ class ManualDisplay(Protocol):
 class ManualMode:
     """Moves the hoop from the keyboard and records calibration points.
 
-    The hoop keeps the orientation it has when the mode starts, only its
-    position is changed. After CALIBRATION_POINT_COUNT recorded points the
-    homography is computed and saved when its reprojection error is at most
-    MAX_REPROJECTION_ERROR. Points are never kept between two runs.
+    The target starts at the measured hoop pose, so a move without an edit
+    leaves the hoop where it is. After CALIBRATION_POINT_COUNT recorded
+    points the homography is computed and saved when its reprojection error
+    is at most MAX_REPROJECTION_ERROR. Points are never kept between two runs.
 
     Args:
         motion: Moves the hoop.
@@ -229,14 +266,21 @@ class ManualMode:
         """Runs until the operator leaves the mode."""
         logger.info("Manual move started.")
         with self._keyboard, self._display:
-            start_hoop_pose = self._motion.get_hoop_pose()
-            current_position = _get_position(start_hoop_pose)
-            state = ManualState(ManualRow.X, current_position)
+            current_hoop_pose = self._motion.get_hoop_pose()
+            state = ManualState(
+                ManualRow.X,
+                _get_position(current_hoop_pose),
+                _get_rotation_angles(current_hoop_pose),
+            )
             session = CalibrationSession()
             message = ""
             while True:
                 view = ManualView(
-                    state, current_position, session.point_count, message
+                    state,
+                    _get_position(current_hoop_pose),
+                    _get_rotation_angles(current_hoop_pose),
+                    session.point_count,
+                    message,
                 )
                 self._display.show(view)
                 state, command = state.handle_key(self._keyboard.read_key())
@@ -246,32 +290,29 @@ class ManualMode:
                     self._display.show(
                         dataclasses.replace(view, message="Moving...")
                     )
-                    current_position, message = self._move(
-                        start_hoop_pose, state.target_position, current_position
+                    current_hoop_pose, message = self._move(
+                        state, current_hoop_pose
                     )
                 elif command is ManualCommand.RECORD:
-                    session, message = self._record(session, current_position)
+                    session, message = self._record(
+                        session, _get_position(current_hoop_pose)
+                    )
         logger.info("Manual move finished.")
 
     def _move(
-        self,
-        start_hoop_pose: Pose,
-        target_position: Point3D,
-        current_position: Point3D,
-    ) -> tuple[Point3D, str]:
-        """Moves the hoop, returns its measured position and a message."""
-        target_hoop_pose = Pose(start_hoop_pose.copy())
-        target_hoop_pose[:3, 3] = target_position
+        self, state: ManualState, current_hoop_pose: Pose
+    ) -> tuple[Pose, str]:
+        """Moves the hoop, returns its measured pose and a message."""
         try:
-            self._motion.move_to_ik(target_hoop_pose)
+            self._motion.move_to_ik(_get_target_hoop_pose(state))
         except NoJointConfigError:
-            return current_position, _log(
+            return current_hoop_pose, _log(
                 "Target is out of reach, robot did not move."
             )
         while self._motion.is_in_motion():
             time.sleep(MOTION_POLL_PERIOD)
         self._keyboard.discard_pending()
-        return _get_position(self._motion.get_hoop_pose()), _log("Move done.")
+        return self._motion.get_hoop_pose(), _log("Move done.")
 
     def _record(
         self, session: CalibrationSession, hoop_position: Point3D
@@ -318,6 +359,19 @@ class ManualMode:
 
 def _get_position(hoop_pose: Pose) -> Point3D:
     return Point3D(hoop_pose[:3, 3].copy())
+
+
+def _get_rotation_angles(hoop_pose: Pose) -> RotationAngles:
+    return angles_from_rotation(RotationMatrix(hoop_pose[:3, :3]))
+
+
+def _get_target_hoop_pose(state: ManualState) -> Pose:
+    target_hoop_pose = Pose(np.eye(4))
+    target_hoop_pose[:3, :3] = rotation_from_angles(
+        state.target_rotation_angles
+    )
+    target_hoop_pose[:3, 3] = state.target_position
+    return target_hoop_pose
 
 
 def _log(message: str) -> str:
