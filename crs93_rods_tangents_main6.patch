@@ -1,0 +1,682 @@
+diff --git a/examples/__init__.py b/examples/__init__.py
+new file mode 100644
+index 0000000..5600145
+--- /dev/null
++++ b/examples/__init__.py
+@@ -0,0 +1 @@
++"""Offline development and visualization examples."""
+diff --git a/examples/preview_rods.py b/examples/preview_rods.py
+new file mode 100644
+index 0000000..e5360ea
+--- /dev/null
++++ b/examples/preview_rods.py
+@@ -0,0 +1,229 @@
++"""Print rod samples and draw three SVG views with tangent arrows.
++
++Run from the project root: uv run python -m examples.preview_rods --puzzle B
++"""
++
++import argparse
++from pathlib import Path
++from xml.etree import ElementTree
++
++import numpy as np
++from numpy.typing import NDArray
++
++from hoop_guide.geometry import rod_to_robot_frame
++from hoop_guide.plate import PlatePose
++from hoop_guide.rods import Puzzle
++from hoop_guide.rods import rod_centerline
++
++
++_VIEW_AXES = ((0, 1, "XY"), (0, 2, "XZ"), (1, 2, "YZ"))
++
++
++def _draw_svg(
++    points: NDArray[np.float64],
++    tangents: NDArray[np.float64],
++    frame_name: str,
++    output: Path,
++) -> None:
++    """Writes an SVG containing orthogonal rod views and tangent arrows."""
++    svg = ElementTree.Element(
++        "svg",
++        {
++            "xmlns": "http://www.w3.org/2000/svg",
++            "viewBox": "0 0 1020 370",
++            "width": "1020",
++            "height": "370",
++        },
++    )
++    ElementTree.SubElement(
++        svg,
++        "rect",
++        {"width": "1020", "height": "370", "fill": "#ffffff"},
++    )
++    marker = ElementTree.SubElement(svg, "defs")
++    arrow = ElementTree.SubElement(
++        marker,
++        "marker",
++        {
++            "id": "tip",
++            "viewBox": "0 0 10 10",
++            "refX": "9",
++            "refY": "5",
++            "markerWidth": "5",
++            "markerHeight": "5",
++            "orient": "auto-start-reverse",
++        },
++    )
++    ElementTree.SubElement(
++        arrow, "path", {"d": "M 0 0 L 10 5 L 0 10 z", "fill": "#2563eb"}
++    )
++
++    for view_index, (horizontal, vertical, title) in enumerate(_VIEW_AXES):
++        origin_x = 170.0 + view_index * 340.0
++        origin_y = 180.0
++        selected = points[:, [horizontal, vertical]]
++        center = (np.max(selected, axis=0) + np.min(selected, axis=0)) / 2
++        extent = float(np.max(np.ptp(selected, axis=0)))
++        scale = 250.0 / max(extent, 0.05)
++        plotted = np.column_stack(
++            (
++                origin_x + (selected[:, 0] - center[0]) * scale,
++                origin_y - (selected[:, 1] - center[1]) * scale,
++            )
++        )
++        ElementTree.SubElement(
++            svg,
++            "rect",
++            {
++                "x": str(view_index * 340 + 12),
++                "y": "24",
++                "width": "316",
++                "height": "324",
++                "fill": "#fafafa",
++                "stroke": "#bbbbbb",
++            },
++        )
++        ElementTree.SubElement(
++            svg,
++            "text",
++            {
++                "x": str(origin_x),
++                "y": "19",
++                "font-size": "16",
++                "text-anchor": "middle",
++                "fill": "#222222",
++            },
++        ).text = f"{title} ({frame_name})"
++        ElementTree.SubElement(
++            svg,
++            "polyline",
++            {
++                "points": " ".join(
++                    f"{point[0]:.2f},{point[1]:.2f}" for point in plotted
++                ),
++                "fill": "none",
++                "stroke": "#d97706",
++                "stroke-width": "4",
++                "stroke-linejoin": "round",
++            },
++        )
++        arrow_stride = max(1, len(points) // 9)
++        bend_indices = np.flatnonzero(
++            np.linalg.norm(np.diff(tangents, axis=0), axis=1) > 1e-8
++        )
++        arrow_indices = sorted(
++            set(range(0, len(points), arrow_stride))
++            | set((bend_indices + 1).tolist())
++            | {len(points) - 1}
++        )
++        for point_index in arrow_indices:
++            direction = tangents[point_index, [horizontal, vertical]]
++            length = float(np.linalg.norm(direction))
++            if length < 1e-9:
++                continue
++            direction = direction / length
++            start_x, start_y = plotted[point_index]
++            ElementTree.SubElement(
++                svg,
++                "line",
++                {
++                    "x1": f"{start_x:.2f}",
++                    "y1": f"{start_y:.2f}",
++                    "x2": f"{start_x + direction[0] * 17:.2f}",
++                    "y2": f"{start_y - direction[1] * 17:.2f}",
++                    "stroke": "#2563eb",
++                    "stroke-width": "2",
++                    "marker-end": "url(#tip)",
++                },
++            )
++        endpoints = ((0, "#16a34a"), (len(points) - 1, "#dc2626"))
++        for point_index, color in endpoints:
++            ElementTree.SubElement(
++                svg,
++                "circle",
++                {
++                    "cx": f"{plotted[point_index, 0]:.2f}",
++                    "cy": f"{plotted[point_index, 1]:.2f}",
++                    "r": "5",
++                    "fill": color,
++                },
++            )
++
++    output.parent.mkdir(parents=True, exist_ok=True)
++    ElementTree.ElementTree(svg).write(
++        output, encoding="unicode", xml_declaration=True
++    )
++
++
++def main() -> None:
++    """Prints rod coordinates and creates an SVG with three projections."""
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument(
++        "--puzzle", choices=["A1", "A2", "B", "C"], default="B"
++    )
++    parser.add_argument("--step", type=float, default=0.005)
++    parser.add_argument(
++        "--frame", choices=["plate", "robot"], default="plate"
++    )
++    parser.add_argument("--plate-x", type=float, default=0.45)
++    parser.add_argument("--plate-y", type=float, default=0.10)
++    parser.add_argument("--plate-heading", type=float, default=0.0)
++    parser.add_argument("--plate-height", type=float, default=0.08)
++    parser.add_argument("--output", type=Path)
++    parser.add_argument(
++        "--all", action="store_true", help="Print every sample"
++    )
++    args = parser.parse_args()
++
++    points_plate, tangents_plate = rod_centerline(
++        Puzzle(args.puzzle), step=args.step
++    )
++    if args.frame == "robot":
++        points_robot, tangents_robot = rod_to_robot_frame(
++            points_plate,
++            tangents_plate,
++            PlatePose(args.plate_x, args.plate_y, args.plate_heading),
++            args.plate_height,
++        )
++        points = np.asarray(points_robot)
++        tangents = np.asarray(tangents_robot)
++    else:
++        points = np.asarray(points_plate)
++        tangents = np.asarray(tangents_plate)
++
++    output = args.output or Path(f"preview_{args.puzzle}_{args.frame}.svg")
++    _draw_svg(points, tangents, args.frame, output)
++    differences = np.linalg.norm(np.diff(points, axis=0), axis=1)
++    bend_indices = np.flatnonzero(
++        np.linalg.norm(np.diff(tangents, axis=0), axis=1) > 1e-8
++    ) + 1
++    selected_indices = (
++        range(len(points))
++        if args.all
++        else sorted({0, len(points) - 1} | set(bend_indices.tolist()))
++    )
++
++    print(
++        f"Puzzle: {args.puzzle} | Frame: {args.frame} "
++        f"| Samples: {len(points)}"
++    )
++    print(f"Centerline length: {differences.sum():.4f} m")
++    print("Index | x [m]   y [m]   z [m]   | tx       ty       tz")
++    for index in selected_indices:
++        x, y, z = points[index]
++        tx, ty, tz = tangents[index]
++        print(
++            f"{index:5d} | {x:+.4f} {y:+.4f} {z:+.4f} | "
++            f"{tx:+.4f} {ty:+.4f} {tz:+.4f}"
++        )
++    print(f"Bend indices: {bend_indices.tolist()}")
++    print(f"SVG preview: {output.resolve()}")
++    if args.frame == "robot":
++        print(
++            "NOTE: Default robot-frame plate pose is illustrative, "
++            "not measured."
++        )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/hoop_guide/geometry.py b/hoop_guide/geometry.py
+index ef2ad61..cfea8b6 100644
+--- a/hoop_guide/geometry.py
++++ b/hoop_guide/geometry.py
+@@ -1,14 +1,23 @@
+-"""Planar rotations about the vertical axis.
++"""Coordinate transformations between the plate and robot frames.
+ 
+-Positive angles are counterclockwise when viewed from above, the same
+-sense as a plate heading. Angle 0 leaves the x axis in place. A positive
+-quarter turn maps it onto the y axis.
+-
+-A point (x, y) rotated about the origin by angle is
+-(cosine * x - sine * y, sine * x + cosine * y).
++Positive plate heading is counterclockwise when viewed from above. The
++plate x axis at heading zero is aligned with the robot x axis.
+ """
+ 
++from __future__ import annotations
++
+ import math
++from typing import TYPE_CHECKING
++
++import numpy as np
++
++from hoop_guide.types import Directions3D
++from hoop_guide.types import PlateDirections3D
++from hoop_guide.types import PlatePoints3D
++from hoop_guide.types import Points3D
++
++if TYPE_CHECKING:
++    from hoop_guide.plate import PlatePose
+ 
+ 
+ def get_cosine_and_sine(angle: float) -> tuple[float, float]:
+@@ -21,3 +30,55 @@ def get_cosine_and_sine(angle: float) -> tuple[float, float]:
+         Cosine and sine of angle.
+     """
+     return math.cos(angle), math.sin(angle)
++
++
++def rod_to_robot_frame(
++    points_plate: PlatePoints3D,
++    tangents_plate: PlateDirections3D,
++    plate: PlatePose,
++    plate_height: float,
++) -> tuple[Points3D, Directions3D]:
++    """Transforms rod points and unit tangents from the plate to robot frame.
++
++    Args:
++        points_plate: Rod centerline in the plate frame, shape (N, 3) [m].
++        tangents_plate: Unit tangents in the plate frame, shape (N, 3).
++        plate: Plate center x, y and heading in the robot frame.
++        plate_height: Height of the plate top above the robot base [m].
++
++    Returns:
++        Rod centerline and unit tangents in the robot frame, shape (N, 3).
++
++    Raises:
++        ValueError: Input shapes or values are invalid.
++    """
++    if (
++        points_plate.ndim != 2
++        or points_plate.shape[1] != 3
++        or points_plate.shape != tangents_plate.shape
++        or len(points_plate) == 0
++    ):
++        raise ValueError(
++            "Points and tangents must have matching (N, 3) shapes."
++        )
++    if not (
++        np.isfinite(points_plate).all()
++        and np.isfinite(tangents_plate).all()
++        and all(
++            math.isfinite(value)
++            for value in (plate.x, plate.y, plate.heading, plate_height)
++        )
++    ):
++        raise ValueError("Rod points, tangents and plate pose must be finite.")
++    if not np.allclose(np.linalg.norm(tangents_plate, axis=1), 1.0):
++        raise ValueError("Rod tangents must have unit length.")
++
++    cosine, sine = get_cosine_and_sine(plate.heading)
++    rotation = np.array(
++        [[cosine, -sine, 0.0], [sine, cosine, 0.0], [0.0, 0.0, 1.0]]
++    )
++    translation = np.array([plate.x, plate.y, plate_height])
++    return (
++        Points3D(points_plate @ rotation.T + translation),
++        Directions3D(tangents_plate @ rotation.T),
++    )
+diff --git a/hoop_guide/rods.py b/hoop_guide/rods.py
+index 0f07239..a547952 100644
+--- a/hoop_guide/rods.py
++++ b/hoop_guide/rods.py
+@@ -1,17 +1,20 @@
+-"""Rod models of the puzzles and sampling of their centerlines.
++"""Rod centerlines sampled in the plate frame.
+ 
+-Rods are modelled in the plate frame (see plate.py) as a chain of straight
+-and arc segments of the centerline, taken from the drawings in ROB1-2025-hw.
++The plate origin is at the rod mounting point on its top surface. The z
++axis points upward. Samples follow each rod from its free tip to the plate.
++
++MEASURE BEFORE PHYSICAL USE: All vertices are nominal drawing dimensions.
++Verify the rod mounting orientation and dimensions on the real workcell.
+ """
+ 
+ import enum
++import math
+ 
+-from hoop_guide.plate import PlatePose
+-from hoop_guide.types import Directions3D
+-from hoop_guide.types import Points3D
++import numpy as np
++from numpy.typing import NDArray
+ 
+-STOP_HEIGHT = 0.040
+-"""Height above the plate where the hoop center stops [m]."""
++from hoop_guide.types import PlateDirections3D
++from hoop_guide.types import PlatePoints3D
+ 
+ 
+ class Puzzle(enum.Enum):
+@@ -24,24 +27,78 @@ class Puzzle(enum.Enum):
+     D = "D"
+ 
+ 
++_STRAIGHT_VERTICES = (
++    (0.0, 0.0, 0.200),
++    (0.0, 0.0, 0.000),
++)
++
++_ROD_VERTICES: dict[Puzzle, tuple[tuple[float, float, float], ...]] = {
++    Puzzle.A1: _STRAIGHT_VERTICES,
++    Puzzle.A2: _STRAIGHT_VERTICES,
++    Puzzle.B: (
++        (0.070, 0.0, 0.200),
++        (0.070, 0.0, 0.150),
++        (0.0, 0.0, 0.080),
++        (0.0, 0.0, 0.000),
++    ),
++    Puzzle.C: (
++        (-0.050, -0.050, 0.200),
++        (-0.050, -0.050, 0.150),
++        (-0.050, 0.0, 0.100),
++        (0.0, 0.0, 0.050),
++        (0.0, 0.0, 0.000),
++    ),
++}
++
++
+ def rod_centerline(
+-    puzzle: Puzzle, plate: PlatePose, plate_height: float, step: float
+-) -> tuple[Points3D, Directions3D]:
+-    """Samples the rod centerline in the robot frame.
++    puzzle: Puzzle, step: float = 0.005
++) -> tuple[PlatePoints3D, PlateDirections3D]:
++    """Samples the full rod and its unit tangents in the plate frame.
+ 
+-    The points go from the free end of the rod down to STOP_HEIGHT above the
+-    plate, so they are the path of the hoop center.
++    Each bend is included once. The tangent at a bend follows the outgoing
++    segment, and the last tangent follows the final segment. These samples
++    describe the physical rod, not the final hoop path.
+ 
+     Args:
+-        puzzle: Which rod.
+-        plate: Pose of the plate.
+-        plate_height: Height of the plate top surface above the robot base
+-            [m].
+-        step: Distance between neighbouring points along the rod [m].
++        puzzle: Rod variant. D is not implemented yet.
++        step: Maximum distance between neighbouring samples [m].
+ 
+     Returns:
+-        Points, shape (N, 3), and unit tangents in them, shape (N, 3), both in
+-        the robot frame. Tangents point along the path, from the free end
+-        down.
++        Centerline points and unit tangents, both shape (N, 3), in the
++        plate frame. Points are in meters and tangents point toward the
++        rod mounting point.
++
++    Raises:
++        ValueError: The sampling step is not finite and positive.
++        NotImplementedError: The rod model is not available yet.
+     """
+-    raise NotImplementedError
++    if not math.isfinite(step) or step <= 0.0:
++        raise ValueError("Sampling step must be finite and positive.")
++    if puzzle not in _ROD_VERTICES:
++        raise NotImplementedError(f"Rod model for {puzzle.value} is missing.")
++
++    sections: list[NDArray[np.float64]] = []
++    directions: list[NDArray[np.float64]] = []
++    vertices = _ROD_VERTICES[puzzle]
++
++    for start, end in zip(vertices, vertices[1:]):
++        start_point = np.asarray(start, dtype=np.float64)
++        displacement = np.asarray(end, dtype=np.float64) - start_point
++        length = float(np.linalg.norm(displacement))
++        unit_tangent = displacement / length
++        sample_count = math.ceil(length / step)
++        fractions = np.linspace(0.0, 1.0, sample_count + 1)
++        section = start_point + fractions[:, np.newaxis] * displacement
++
++        if sections:
++            directions[-1][-1] = unit_tangent
++            section = section[1:]
++
++        sections.append(section)
++        directions.append(np.tile(unit_tangent, (len(section), 1)))
++
++    return (
++        PlatePoints3D(np.concatenate(sections)),
++        PlateDirections3D(np.concatenate(directions)),
++    )
+diff --git a/hoop_guide/types.py b/hoop_guide/types.py
+index 2bea842..f51354c 100644
+--- a/hoop_guide/types.py
++++ b/hoop_guide/types.py
+@@ -18,6 +18,12 @@ PixelPoints = NewType("PixelPoints", NDArray[np.float64])
+ PlanePoints = NewType("PlanePoints", NDArray[np.float64])
+ """Points on the table plane in the robot frame, shape (N, 2), meters."""
+ 
++PlatePoints3D = NewType("PlatePoints3D", NDArray[np.float64])
++"""Points in the plate frame, shape (N, 3), meters."""
++
++PlateDirections3D = NewType("PlateDirections3D", NDArray[np.float64])
++"""Unit tangent vectors in the plate frame, shape (N, 3)."""
++
+ Points3D = NewType("Points3D", NDArray[np.float64])
+ """Points in the robot frame, shape (N, 3), meters."""
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index 2dad3c4..3d2b39e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -41,7 +41,6 @@ omit = [
+     "hoop_guide/ui.py",
+     "hoop_guide/viewer/window.py",
+     # Interface stubs only, remove from here together with the implementation.
+-    "hoop_guide/rods.py",
+ ]
+ 
+ [tool.coverage.report]
+diff --git a/tests/unit/test_geometry.py b/tests/unit/test_geometry.py
+index 200fa9b..ba266c2 100644
+--- a/tests/unit/test_geometry.py
++++ b/tests/unit/test_geometry.py
+@@ -1,10 +1,15 @@
+ import math
+ 
++import numpy as np
+ import pytest
+ from hypothesis import given
+ from hypothesis import strategies as st
+ 
+ from hoop_guide.geometry import get_cosine_and_sine
++from hoop_guide.geometry import rod_to_robot_frame
++from hoop_guide.plate import PlatePose
++from hoop_guide.types import PlateDirections3D
++from hoop_guide.types import PlatePoints3D
+ 
+ 
+ def rotate(x, y, angle):
+@@ -29,3 +34,58 @@ def test_opposite_rotation_returns_the_point(x, y, angle):
+     rotated_x, rotated_y = rotate(x, y, angle)
+ 
+     assert rotate(rotated_x, rotated_y, -angle) == pytest.approx((x, y))
++
++
++def test_rod_transform_translation_keeps_unit_tangents_unchanged():
++    points, tangents = rod_to_robot_frame(
++        PlatePoints3D(np.array([[0.0, 0.0, 0.2], [0.0, 0.0, 0.0]])),
++        PlateDirections3D(np.array([[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]])),
++        PlatePose(0.45, 0.1, 0.0),
++        plate_height=0.08,
++    )
++
++    np.testing.assert_allclose(points, [[0.45, 0.1, 0.28], [0.45, 0.1, 0.08]])
++    np.testing.assert_allclose(tangents, [[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]])
++
++
++def test_rod_transform_quarter_turn_rotates_points_and_tangents():
++    points, tangents = rod_to_robot_frame(
++        PlatePoints3D(np.array([[0.1, 0.0, 0.2]])),
++        PlateDirections3D(np.array([[1.0, 0.0, 0.0]])),
++        PlatePose(0.45, 0.1, math.pi / 2),
++        plate_height=0.08,
++    )
++
++    np.testing.assert_allclose(points, [[0.45, 0.20, 0.28]], atol=1e-12)
++    np.testing.assert_allclose(tangents, [[0.0, 1.0, 0.0]], atol=1e-12)
++
++
++@pytest.mark.parametrize("bad_height", [float("nan"), float("inf")])
++def test_rod_transform_rejects_nonfinite_height(bad_height):
++    with pytest.raises(ValueError, match="finite"):
++        rod_to_robot_frame(
++            PlatePoints3D(np.array([[0.0, 0.0, 0.2]])),
++            PlateDirections3D(np.array([[0.0, 0.0, -1.0]])),
++            PlatePose(0.0, 0.0, 0.0),
++            bad_height,
++        )
++
++
++def test_rod_transform_rejects_invalid_shape():
++    with pytest.raises(ValueError, match="matching"):
++        rod_to_robot_frame(
++            PlatePoints3D(np.ones((2, 3))),
++            PlateDirections3D(np.ones((1, 3))),
++            PlatePose(0.0, 0.0, 0.0),
++            0.08,
++        )
++
++
++def test_rod_transform_rejects_nonunit_tangents():
++    with pytest.raises(ValueError, match="unit length"):
++        rod_to_robot_frame(
++            PlatePoints3D(np.array([[0.0, 0.0, 0.2]])),
++            PlateDirections3D(np.array([[0.0, 0.0, 2.0]])),
++            PlatePose(0.0, 0.0, 0.0),
++            0.08,
++        )
+diff --git a/tests/unit/test_rods.py b/tests/unit/test_rods.py
+new file mode 100644
+index 0000000..ab70f2f
+--- /dev/null
++++ b/tests/unit/test_rods.py
+@@ -0,0 +1,109 @@
++import math
++
++import numpy as np
++import pytest
++
++from hoop_guide.rods import Puzzle
++from hoop_guide.rods import rod_centerline
++
++
++@pytest.mark.parametrize("puzzle", [Puzzle.A1, Puzzle.A2, Puzzle.B, Puzzle.C])
++def test_rod_samples_have_matching_shapes_and_unit_tangents(puzzle):
++    points, tangents = rod_centerline(puzzle, step=0.005)
++
++    assert points.shape == tangents.shape
++    assert points.ndim == 2
++    assert points.shape[1] == 3
++    np.testing.assert_allclose(np.linalg.norm(tangents, axis=1), 1.0)
++
++
++def test_a1_has_vertical_centerline_from_free_tip_to_plate():
++    points, tangents = rod_centerline(Puzzle.A1)
++
++    np.testing.assert_allclose(points[0], [0.0, 0.0, 0.2])
++    np.testing.assert_allclose(points[-1], [0.0, 0.0, 0.0])
++    np.testing.assert_allclose(points[:, :2], 0.0)
++    np.testing.assert_allclose(tangents, np.tile([0.0, 0.0, -1.0], (41, 1)))
++
++
++def test_a1_and_a2_have_identical_shapes():
++    points_a1, tangents_a1 = rod_centerline(Puzzle.A1)
++    points_a2, tangents_a2 = rod_centerline(Puzzle.A2)
++
++    np.testing.assert_allclose(points_a1, points_a2)
++    np.testing.assert_allclose(tangents_a1, tangents_a2)
++
++
++@pytest.mark.parametrize(
++    ("puzzle", "vertices"),
++    [
++        (
++            Puzzle.B,
++            [
++                [0.07, 0.0, 0.2],
++                [0.07, 0.0, 0.15],
++                [0.0, 0.0, 0.08],
++                [0.0, 0.0, 0.0],
++            ],
++        ),
++        (
++            Puzzle.C,
++            [
++                [-0.05, -0.05, 0.2],
++                [-0.05, -0.05, 0.15],
++                [-0.05, 0.0, 0.10],
++                [0.0, 0.0, 0.05],
++                [0.0, 0.0, 0.0],
++            ],
++        ),
++    ],
++)
++def test_b_and_c_include_each_bend_once(puzzle, vertices):
++    points, _ = rod_centerline(puzzle, step=0.003)
++
++    for vertex in vertices:
++        occurrences = np.count_nonzero(
++            np.all(np.isclose(points, vertex, atol=1e-12), axis=1)
++        )
++        assert occurrences == 1
++
++
++@pytest.mark.parametrize("puzzle", [Puzzle.A1, Puzzle.A2, Puzzle.B, Puzzle.C])
++def test_sampling_step_is_an_upper_bound(puzzle):
++    points, _ = rod_centerline(puzzle, step=0.007)
++
++    distances = np.linalg.norm(np.diff(points, axis=0), axis=1)
++    assert np.all(distances > 0)
++    assert np.all(distances <= 0.007 + 1e-12)
++
++
++@pytest.mark.parametrize("puzzle", [Puzzle.A1, Puzzle.B, Puzzle.C])
++def test_each_tangent_follows_the_next_sample(puzzle):
++    points, tangents = rod_centerline(puzzle, step=0.007)
++    displacements = np.diff(points, axis=0)
++    displacement_units = displacements / np.linalg.norm(
++        displacements, axis=1, keepdims=True
++    )
++
++    np.testing.assert_allclose(tangents[:-1], displacement_units, atol=1e-12)
++    np.testing.assert_allclose(tangents[-1], displacement_units[-1], atol=1e-12)
++
++
++def test_b_has_correct_outgoing_tangent_at_first_bend():
++    points, tangents = rod_centerline(Puzzle.B)
++    bend_index = np.flatnonzero(np.isclose(points[:, 2], 0.15))[0]
++
++    expected = np.array([-1.0, 0.0, -1.0]) / math.sqrt(2.0)
++    np.testing.assert_allclose(tangents[bend_index], expected)
++    np.testing.assert_allclose(tangents[bend_index - 1], [0.0, 0.0, -1.0])
++
++
++@pytest.mark.parametrize("step", [0.0, -0.01, float("inf"), float("nan")])
++def test_invalid_sampling_step_is_rejected(step):
++    with pytest.raises(ValueError, match="Sampling step"):
++        rod_centerline(Puzzle.A1, step=step)
++
++
++def test_d_is_explicitly_not_implemented():
++    with pytest.raises(NotImplementedError, match="D"):
++        rod_centerline(Puzzle.D)
