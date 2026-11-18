@@ -2,6 +2,7 @@
 
 import contextlib
 import dataclasses
+import math
 from collections.abc import Iterator
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
@@ -19,13 +20,14 @@ from rich.table import Table
 from rich.text import Text
 
 from hoop_guide.calibration import CALIBRATION_POINT_COUNT
+from hoop_guide.manual_mode import POSITION_ROWS
+from hoop_guide.manual_mode import ROTATION_ROWS
 from hoop_guide.manual_mode import ManualRow
 from hoop_guide.manual_mode import ManualView
 
 MANUAL_MODE_KEYS = (
     "Up/Down row   Left/Right value   Enter move or exit   Space record point"
 )
-_AXIS_ROWS = (ManualRow.X, ManualRow.Y, ManualRow.Z)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -163,12 +165,23 @@ class RichManualDisplay:
 def _render_manual_view(view: ManualView) -> RenderableType:
     table = Table.grid(padding=(0, 3))
     table.add_row("", "", "target [m]", "current [m]", style="dim")
-    for row in _AXIS_ROWS:
+    for axis_index, row in enumerate(POSITION_ROWS):
         table.add_row(
             _selection_mark(view, row),
-            row.name.lower(),
-            f"{view.state.target_position[row.value]:.3f}",
-            f"{view.current_position[row.value]:.3f}",
+            row.value,
+            f"{view.state.target_position[axis_index]:.3f}",
+            f"{view.current_position[axis_index]:.3f}",
+            style=_row_style(view, row),
+        )
+    table.add_row("", "", "target [deg]", "current [deg]", style="dim")
+    for axis_index, row in enumerate(ROTATION_ROWS):
+        target_angle = view.state.target_rotation_angles[axis_index]
+        current_angle = view.current_rotation_angles[axis_index]
+        table.add_row(
+            _selection_mark(view, row),
+            row.value,
+            f"{math.degrees(target_angle):.1f}",
+            f"{math.degrees(current_angle):.1f}",
             style=_row_style(view, row),
         )
     table.add_row(
