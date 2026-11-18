@@ -21,6 +21,7 @@ from hoop_guide.types import Point3D
 from hoop_guide.types import RotationMatrix
 from hoop_guide.types import TurnAngles
 from hoop_guide.vision import Frame
+from hoop_guide.vision import detect_hoop_center
 from hoop_guide.vision import image_to_plane
 
 START_POSITION = (0.4, 0.0, 0.05)
@@ -131,7 +132,8 @@ class FakeFrames:
             if self._frame_index == self._shifted_frame_index:
                 hoop_pixel = (hoop_pixel[0] + 300.0, hoop_pixel[1])
         self._frame_index += 1
-        return Frame(make_image(hoop_pixel), timestamp=0.0, markers=())
+        image = make_image(hoop_pixel)
+        return Frame(image, 0.0, (), detect_hoop_center(image))
 
 
 class FakeKeyboard:

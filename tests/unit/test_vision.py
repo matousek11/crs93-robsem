@@ -165,6 +165,21 @@ def test_process_image_keeps_image_and_timestamp_and_adds_markers():
     assert [m.marker_id for m in frame.markers] == [5]
 
 
+def test_process_image_adds_the_detected_hoop_center():
+    image = blank_image()
+    cv2.circle(image, (180, 220), 40, (0, 0, 0), thickness=10)
+
+    frame = process_image(image, timestamp=0.0)
+
+    assert frame.hoop_center == pytest.approx((180.0, 220.0), abs=1.0)
+
+
+def test_process_image_without_a_hoop_has_no_hoop_center():
+    frame = process_image(blank_image(), timestamp=0.0)
+
+    assert frame.hoop_center is None
+
+
 def test_detect_hoop_center_finds_center_accurately():
     image = Image(blank_image())
     cv2.circle(image, (180, 220), 40, (0, 0, 0), thickness=10)

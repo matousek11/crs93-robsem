@@ -11,12 +11,18 @@ from hoop_guide.types import PixelPoints
 from hoop_guide.viewer.overlay import AXIS_X_COLOR
 from hoop_guide.viewer.overlay import AXIS_Y_COLOR
 from hoop_guide.viewer.overlay import FIRST_CORNER_COLOR
+from hoop_guide.viewer.overlay import HOOP_CENTER_COLOR
+from hoop_guide.viewer.overlay import HOOP_CENTER_RADIUS
 from hoop_guide.viewer.overlay import LINE_THICKNESS
 from hoop_guide.viewer.overlay import MARKER_COLOR
 from hoop_guide.viewer.overlay import REFERENCE_IMAGE_WIDTH
+from hoop_guide.viewer.overlay import ROD_ORIGIN_COLOR
+from hoop_guide.viewer.overlay import ROD_ORIGIN_RADIUS
 from hoop_guide.viewer.overlay import TEXT_ORIGIN
+from hoop_guide.viewer.overlay import draw_hoop_center
 from hoop_guide.viewer.overlay import draw_markers
 from hoop_guide.viewer.overlay import draw_plate_pose
+from hoop_guide.viewer.overlay import draw_rod_origin
 from hoop_guide.viewer.overlay import draw_text
 from hoop_guide.viewer.overlay import render
 from hoop_guide.viewer.overlay import status_line
@@ -83,8 +89,12 @@ def test_draw_plate_pose_draws_axes_from_plate_center(
         lambda image: draw_plate_pose(
             image, PlatePose(0.1, 0.1, 0.0), MM_PER_PIXEL
         ),
+        lambda image: draw_hoop_center(image, (100.0, 100.0)),
+        lambda image: draw_rod_origin(
+            image, PlatePose(0.1, 0.1, 0.0), MM_PER_PIXEL
+        ),
     ],
-    ids=["markers", "plate-pose"],
+    ids=["markers", "plate-pose", "hoop-center", "rod-origin"],
 )
 def test_drawing_leaves_input_image_unchanged(image, draw):
     original = image.copy()
@@ -120,6 +130,31 @@ def test_render_draws_markers_and_status_line(image):
     assert result[: TEXT_ORIGIN[1], : TEXT_ORIGIN[1] * 3].any()
 
 
+def test_draw_hoop_center_draws_a_dot_at_the_center(image):
+    result = draw_hoop_center(image, (120.4, 79.6))
+
+    assert color_at(result, 120, 80) == HOOP_CENTER_COLOR
+    assert color_at(result, 120 + HOOP_CENTER_RADIUS + 2, 80) == (0, 0, 0)
+
+
+def test_render_draws_the_detected_hoop_center(image):
+    frame = Frame(image, 0.0, (), hoop_center=(150.0, 160.0))
+
+    result = render(frame, 10.0)
+
+    assert color_at(result, 150, 160) == HOOP_CENTER_COLOR
+
+
+def test_render_without_a_detected_hoop_draws_no_dot(image):
+    frame = Frame(image, 0.0, ())
+
+    result = render(frame, 10.0)
+
+    assert HOOP_CENTER_COLOR not in {
+        tuple(int(c) for c in pixel) for pixel in result.reshape(-1, 3)
+    }
+
+
 def test_render_draws_plate_pose_when_provided(image):
     frame = Frame(image, 0.0, ())
     pose = PlatePose(x=0.1, y=0.1, heading=0.0)
@@ -128,6 +163,26 @@ def test_render_draws_plate_pose_when_provided(image):
 
     assert color_at(result, 125, 100) == AXIS_X_COLOR
     assert color_at(result, 100, 125) == AXIS_Y_COLOR
+
+
+def test_draw_rod_origin_draws_a_dot_at_the_plate_center(image):
+    pose = PlatePose(x=0.12, y=0.08, heading=1.0)
+
+    result = draw_rod_origin(image, pose, MM_PER_PIXEL)
+
+    assert color_at(result, 120, 80) == ROD_ORIGIN_COLOR
+    assert color_at(result, 120 + ROD_ORIGIN_RADIUS + 2, 80) == (0, 0, 0)
+
+
+def test_render_draws_the_rod_origin_over_the_plate_axes(image):
+    frame = Frame(image, 0.0, ())
+    pose = PlatePose(x=0.1, y=0.1, heading=0.0)
+
+    result = render(frame, 10.0, plate_pose=pose, homography=MM_PER_PIXEL)
+
+    assert color_at(result, 100, 100) == ROD_ORIGIN_COLOR
+    # Still on the x axis, but inside the dot.
+    assert color_at(result, 103, 100) == ROD_ORIGIN_COLOR
 
 
 def test_render_includes_rotation_from_table_estimation(image):

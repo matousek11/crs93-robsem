@@ -48,11 +48,14 @@ class Frame:
         image: Camera image.
         timestamp: time.monotonic() right after the image was grabbed [s].
         markers: Markers detected in the image.
+        hoop_center: Hoop center (u, v) found by detect_hoop_center [px],
+            None when the hoop was not found.
     """
 
     image: Image
     timestamp: float
     markers: tuple[MarkerDetection, ...]
+    hoop_center: tuple[float, float] | None = None
 
 
 def process_image(image: Image, timestamp: float) -> Frame:
@@ -65,7 +68,9 @@ def process_image(image: Image, timestamp: float) -> Frame:
     Returns:
         The image with its results.
     """
-    return Frame(image, timestamp, detect_markers(image))
+    return Frame(
+        image, timestamp, detect_markers(image), detect_hoop_center(image)
+    )
 
 
 def detect_markers(image: Image) -> tuple[MarkerDetection, ...]:

@@ -11,6 +11,8 @@ from hoop_guide.vision import MarkerDetection
 
 IDENTITY = Homography(np.eye(3))
 PLATE = (1.0, 2.0)
+TOP_LEFT_MARKER_ID = 1
+BOTTOM_RIGHT_MARKER_ID = 2
 
 
 def marker(marker_id, corners):
@@ -18,10 +20,10 @@ def marker(marker_id, corners):
 
 
 def test_one_aligned_marker_gives_plate_center_and_zero_heading():
-    # Marker 0 sits up-left of the plate center, so the plate center is
-    # down-right of the marker center (0.9625, 2.0375).
+    # The top left marker sits up-left of the plate center, so the plate
+    # center is down-right of the marker center (0.9625, 2.0375).
     detected = marker(
-        0,
+        TOP_LEFT_MARKER_ID,
         [
             (0.9425, 2.0575),
             (0.9825, 2.0575),
@@ -40,7 +42,7 @@ def test_one_aligned_marker_gives_plate_center_and_zero_heading():
 
 def test_marker_on_the_other_corner_gives_the_same_plate_pose():
     detected = marker(
-        1,
+        BOTTOM_RIGHT_MARKER_ID,
         [
             (1.0175, 1.9825),
             (1.0575, 1.9825),
@@ -58,7 +60,7 @@ def test_marker_on_the_other_corner_gives_the_same_plate_pose():
 def test_quarter_turn_maps_plate_x_axis_onto_robot_y_axis():
     # Marker center (0.9625, 1.9625), square rotated by a quarter turn.
     detected = marker(
-        0,
+        TOP_LEFT_MARKER_ID,
         [
             (0.9425, 1.9425),
             (0.9425, 1.9825),
@@ -87,10 +89,10 @@ def test_heading_uses_both_marker_edges():
     x_axis = (top_right - top_left) + (bottom_right - bottom_left)
     heading = math.atan2(x_axis[1], x_axis[0])
     center = corners.mean(axis=0)
-    offset_x, offset_y = MARKER_CENTERS[0]
+    offset_x, offset_y = MARKER_CENTERS[TOP_LEFT_MARKER_ID]
     cos, sin = math.cos(heading), math.sin(heading)
 
-    pose = estimate_plate_pose([marker(0, corners)], IDENTITY)
+    pose = estimate_plate_pose([marker(TOP_LEFT_MARKER_ID, corners)], IDENTITY)
 
     assert pose is not None
     assert pose.heading == pytest.approx(heading)
@@ -104,7 +106,7 @@ def test_heading_uses_both_marker_edges():
 
 def test_homography_scales_pixel_corners_into_meters():
     detected = marker(
-        0,
+        TOP_LEFT_MARKER_ID,
         [
             (942.5, 2057.5),
             (982.5, 2057.5),
@@ -123,7 +125,7 @@ def test_homography_scales_pixel_corners_into_meters():
 def test_two_markers_agree_on_the_plate_pose():
     markers = [
         marker(
-            0,
+            TOP_LEFT_MARKER_ID,
             [
                 (0.9425, 2.0575),
                 (0.9825, 2.0575),
@@ -132,7 +134,7 @@ def test_two_markers_agree_on_the_plate_pose():
             ],
         ),
         marker(
-            1,
+            BOTTOM_RIGHT_MARKER_ID,
             [
                 (1.0175, 1.9825),
                 (1.0575, 1.9825),
@@ -150,7 +152,7 @@ def test_two_markers_agree_on_the_plate_pose():
 
 def test_unknown_marker_is_ignored():
     known = marker(
-        0,
+        TOP_LEFT_MARKER_ID,
         [
             (0.9425, 2.0575),
             (0.9825, 2.0575),
