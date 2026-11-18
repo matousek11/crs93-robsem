@@ -24,7 +24,6 @@ from hoop_guide.types import Pose
 from hoop_guide.types import RotationMatrix
 from hoop_guide.types import TurnAngles
 from hoop_guide.vision import Frame
-from hoop_guide.vision import detect_hoop_center
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +330,7 @@ class ManualMode:
         frame = self._frames.latest
         if frame is None:
             return session, _log("No camera image yet, point not recorded.")
-        hoop_center = detect_hoop_center(frame.image)
+        hoop_center = frame.hoop_center
         if hoop_center is None:
             return session, _log(
                 "Hoop not found in the image, point not recorded."

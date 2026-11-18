@@ -21,6 +21,8 @@ from hoop_guide.vision import MarkerDetection
 # Colors are BGR.
 MARKER_COLOR = (255, 255, 0)
 FIRST_CORNER_COLOR = (0, 0, 255)
+HOOP_CENTER_COLOR = (0, 0, 255)
+ROD_ORIGIN_COLOR = (0, 255, 0)
 AXIS_X_COLOR = (0, 0, 255)
 AXIS_Y_COLOR = (0, 255, 0)
 TEXT_COLOR = (255, 255, 255)
@@ -36,6 +38,8 @@ size on the screen when the window shrinks a large camera image.
 
 LINE_THICKNESS = 2  # [px]
 FIRST_CORNER_RADIUS = 4  # [px]
+HOOP_CENTER_RADIUS = 6  # [px]
+ROD_ORIGIN_RADIUS = 6  # [px]
 TEXT_ORIGIN = (10, 30)  # [px], bottom left of the text
 TEXT_SCALE = 1.0
 TEXT_THICKNESS = 2  # [px]
@@ -60,11 +64,15 @@ def render(
         table_estimation: Fitted table motion, if available.
 
     Returns:
-        Copy of the image with the markers, plate axes and a status line.
+        Copy of the image with the markers, detected hoop center, plate
+        axes, rod origin and a status line.
     """
     result = draw_markers(frame.image, frame.markers)
+    if frame.hoop_center is not None:
+        result = draw_hoop_center(result, frame.hoop_center)
     if plate_pose is not None and homography is not None:
         result = draw_plate_pose(result, plate_pose, homography)
+        result = draw_rod_origin(result, plate_pose, homography)
     is_rotating_leftwise = (
         table_estimation.is_rotating_leftwise
         if table_estimation is not None
@@ -160,6 +168,27 @@ def draw_markers(image: Image, markers: Sequence[MarkerDetection]) -> Image:
     return Image(result)
 
 
+def draw_hoop_center(image: Image, hoop_center: tuple[float, float]) -> Image:
+    """Draws a dot where the hoop center was detected.
+
+    Args:
+        image: Camera image.
+        hoop_center: Detected hoop center (u, v) [px].
+
+    Returns:
+        Copy of the image with the dot.
+    """
+    result = image.copy()
+    cv2.circle(
+        result,
+        (round(hoop_center[0]), round(hoop_center[1])),
+        _scale_size(HOOP_CENTER_RADIUS, _get_size_scale(image)),
+        HOOP_CENTER_COLOR,
+        cv2.FILLED,
+    )
+    return Image(result)
+
+
 def draw_plate_pose(
     image: Image, pose: PlatePose, homography: Homography
 ) -> Image:
@@ -186,6 +215,35 @@ def draw_plate_pose(
     thickness = _scale_size(LINE_THICKNESS, _get_size_scale(image))
     cv2.arrowedLine(result, origin_px, x_end_px, AXIS_X_COLOR, thickness)
     cv2.arrowedLine(result, origin_px, y_end_px, AXIS_Y_COLOR, thickness)
+    return Image(result)
+
+
+def draw_rod_origin(
+    image: Image, pose: PlatePose, homography: Homography
+) -> Image:
+    """Draws a dot where the rod starts on the plate.
+
+    The rod is mounted in the origin of the plate frame, see plate.py.
+
+    Args:
+        image: Camera image.
+        pose: Pose of the plate in the robot frame.
+        homography: Calibrated image to table plane homography.
+
+    Returns:
+        Copy of the image with the dot.
+    """
+    rod_origin = _plane_to_image(
+        PlanePoints(np.array([[pose.x, pose.y]])), homography
+    )[0]
+    result = image.copy()
+    cv2.circle(
+        result,
+        (round(rod_origin[0]), round(rod_origin[1])),
+        _scale_size(ROD_ORIGIN_RADIUS, _get_size_scale(image)),
+        ROD_ORIGIN_COLOR,
+        cv2.FILLED,
+    )
     return Image(result)
 
 

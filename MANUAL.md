@@ -22,10 +22,12 @@ With the real robot a window with the live camera image opens at start. The virt
 
 The window shows:
 
+- A larger red dot where the hoop detection thinks the hoop center is, in every image. No dot means the hoop was not found. The same center is recorded by Space in the manual move.
+- A green dot where the vision thinks the rod starts on the plate, with the x axis (red arrow) and the y axis (green arrow) of the plate from it. Shown only when a homography is saved and a marker of the plate is seen.
 - Every detected ArUco marker (`DICT_4X4_50`) with its outline, ID and a red dot in its top left corner, also markers that do not belong to the plate. This way the IDs on the plates can be checked.
 - A status line in the top left corner, e.g. `10.0 fps | markers: 0, 1`. The frame rate is averaged over the last 10 frames and shows how many images the application really gets.
 
-The plate frame, rod and prediction will be added when they are implemented.
+The rod and prediction will be added when they are implemented.
 
 The window is display only. Keys pressed in it do nothing, all control stays in the terminal. Closing it does not stop the robot or the application, the window does not come back until the next start.
 

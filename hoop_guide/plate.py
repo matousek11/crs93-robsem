@@ -18,10 +18,12 @@ PLATE_SIZE = 0.125  # 12.5 cm
 MARKER_SIZE = 0.040  # 4 cm
 
 # Marker centers in the plate frame [m], top left and bottom right in the
-# drawing. The IDs are placeholders, they must be verified in the lab.
+# drawing. IDs 1 and 2 were seen on the plate in the lab. Which of them is
+# the top left one follows from the plate axes drawn in the camera window,
+# other plates can carry other IDs.
 MARKER_CENTERS: dict[int, tuple[float, float]] = {
-    0: (-0.0375, 0.0375),
-    1: (0.0375, -0.0375),
+    1: (-0.0375, 0.0375),
+    2: (0.0375, -0.0375),
 }
 
 # Angle of each marker x axis from the plate x axis [rad]. The markers are

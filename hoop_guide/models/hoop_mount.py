@@ -20,9 +20,9 @@ FLANGE_TO_GRIP = 0.0
 FLANGE_TO_HOOP = Pose(
     np.array(
         [
-            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, -(FLANGE_TO_GRIP + GRIP_TO_HOOP_CENTER)],
             [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, FLANGE_TO_GRIP + GRIP_TO_HOOP_CENTER],
+            [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ]
     )
