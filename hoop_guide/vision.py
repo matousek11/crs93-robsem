@@ -1,9 +1,11 @@
 """ArUco marker detection and mapping from the image to the table plane."""
 
 import dataclasses
+import math
 
 import cv2
 import numpy as np
+from numpy.typing import NDArray
 
 from hoop_guide.types import Homography
 from hoop_guide.types import Image
@@ -99,13 +101,42 @@ def detect_markers(image: Image) -> tuple[MarkerDetection, ...]:
 
 MIN_HOOP_AREA = 100.0  # [px^2]
 MAX_HOOP_AREA_RATIO = 0.8
+
+MAX_HOOP_RADIAL_DEVIATION = 0.05
+"""Largest RMS distance of a hoop contour from its fitted circle, as a part
+of the circle radius. A square has about 0.1."""
+
+MIN_HOOP_FILL = 0.8
+"""Smallest area inside a hoop contour as a part of the area of its fitted
+circle. Tells a closed contour from an arc."""
+
+THRESHOLD_BLOCK_WIDTH_RATIO = 0.04
+"""Side of the neighbourhood a pixel is compared with, as a part of the
+image width. It must be several times wider than the hoop line."""
+
+THRESHOLD_OFFSET = 8.0
+"""How much darker than the mean of its neighbourhood a pixel of the hoop
+line must be, in gray levels of 0 to 255."""
+
+BLUR_SIGMA_WIDTH_RATIO = 0.001
+"""Sigma of the blur that removes pixel noise before thresholding, as a part
+of the image width."""
+
 _COLOR_CHANNELS = 3
 _IMAGE_POINT_DIMENSION = 2
 _HOMOGRAPHY_SHAPE = (3, 3)
+_MIN_THRESHOLD_BLOCK = 3  # [px], the smallest odd block with neighbours
 
 
 def detect_hoop_center(image: Image) -> tuple[float, float] | None:
-    """Finds the center of the contrast hoop in the image.
+    """Finds the center of the hoop in the image.
+
+    The hoop is the largest round closed contour that is darker than its
+    neighbourhood. Every pixel is compared with the mean around it, so a
+    thin hoop line is found under uneven light too. A contour is round when
+    it stays close to the circle fitted to it, which rules out the gripper
+    and the markers however large they are. The center is the center of
+    the fitted circle.
 
     Args:
         image: Camera image, shape (H, W, 3), BGR.
@@ -126,24 +157,80 @@ def detect_hoop_center(image: Image) -> tuple[float, float] | None:
             "Image must have shape (H, W, 3) with non-zero dimensions."
         )
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresholded = cv2.threshold(
-        gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-    )
     contours, _ = cv2.findContours(
-        thresholded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        _threshold_darker_than_neighbourhood(image),
+        cv2.RETR_LIST,
+        cv2.CHAIN_APPROX_NONE,
     )
-    if not contours:
-        return None
+    max_area = image.shape[0] * image.shape[1] * MAX_HOOP_AREA_RATIO
+    hoop_center = None
+    hoop_area = 0.0
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if area < MIN_HOOP_AREA or area >= max_area or area <= hoop_area:
+            continue
+        # A contour with an area never has all points on one line.
+        center_x, center_y, radius, radial_deviation = _fit_circle(
+            PixelPoints(contour.reshape(-1, 2).astype(float))
+        )
+        if (
+            radial_deviation <= MAX_HOOP_RADIAL_DEVIATION * radius
+            and area >= MIN_HOOP_FILL * math.pi * radius**2
+        ):
+            hoop_center = (center_x, center_y)
+            hoop_area = area
+    return hoop_center
 
-    largest_contour = max(contours, key=cv2.contourArea)
-    area = float(cv2.contourArea(largest_contour))
-    total_area = float(image.shape[0] * image.shape[1])
-    if area < MIN_HOOP_AREA or area >= total_area * MAX_HOOP_AREA_RATIO:
-        return None
 
-    (center_x, center_y), _ = cv2.minEnclosingCircle(largest_contour)
-    return float(center_x), float(center_y)
+def _threshold_darker_than_neighbourhood(image: Image) -> NDArray[np.uint8]:
+    """Returns a mask of pixels darker than the mean around them, 255 or 0."""
+    width = image.shape[1]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (0, 0), width * BLUR_SIGMA_WIDTH_RATIO)
+    block = max(
+        _MIN_THRESHOLD_BLOCK, round(width * THRESHOLD_BLOCK_WIDTH_RATIO)
+    )
+    odd_block = block + 1 - block % 2
+    mask = cv2.adaptiveThreshold(
+        blurred,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        odd_block,
+        THRESHOLD_OFFSET,
+    )
+    return mask.astype(np.uint8)
+
+
+def _fit_circle(
+    points: PixelPoints,
+) -> tuple[float, float, float, float]:
+    """Fits a circle to points by least squares.
+
+    A circle with the center (a, b) and the radius r satisfies
+    x^2 + y^2 = 2 a x + 2 b y + (r^2 - a^2 - b^2), which is linear in a, b
+    and the last term.
+
+    Args:
+        points: Points on the circle, shape (N, 2) [px], not all on one
+            line.
+
+    Returns:
+        Center x, center y, radius and the RMS distance of the points from
+        the circle, all in pixels.
+    """
+    equation_coefficients = np.column_stack(
+        [2.0 * points, np.ones(len(points))]
+    )
+    squared_distances = (points**2).sum(axis=1)
+    solution = np.linalg.lstsq(
+        equation_coefficients, squared_distances, rcond=None
+    )[0]
+    center_x, center_y, constant = (float(value) for value in solution)
+    radius = math.sqrt(constant + center_x**2 + center_y**2)
+    distances = np.hypot(points[:, 0] - center_x, points[:, 1] - center_y)
+    radial_deviation = float(np.sqrt(np.mean((distances - radius) ** 2)))
+    return center_x, center_y, radius, radial_deviation
 
 
 def image_to_plane(points: PixelPoints, homography: Homography) -> PlanePoints:
