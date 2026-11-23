@@ -20,6 +20,8 @@ from hoop_guide.keyboard import parse_key
         ("\r", Key.ENTER),
         ("\n", Key.ENTER),
         (" ", Key.SPACE),
+        ("c", Key.STOP),
+        ("C", Key.STOP),
     ],
     ids=[
         "up",
@@ -30,6 +32,8 @@ from hoop_guide.keyboard import parse_key
         "carriage_return",
         "line_feed",
         "space",
+        "stop",
+        "stop_with_shift",
     ],
 )
 def test_parse_key_of_a_used_key(characters, key):
@@ -90,6 +94,26 @@ def test_reader_discards_keys_pressed_before_the_call(terminal):
         key = reader.read_key()
 
     assert key is Key.SPACE
+
+
+def test_poll_returns_a_waiting_key_and_skips_keys_without_a_meaning(terminal):
+    typing_end, reading_end = terminal
+
+    with TerminalKeyReader(reading_end) as reader:
+        os.write(typing_end, b"ac")
+        key = reader.poll_key()
+
+    assert key is Key.STOP
+
+
+def test_poll_without_a_waiting_key_returns_none_at_once(terminal):
+    typing_end, reading_end = terminal
+
+    with TerminalKeyReader(reading_end) as reader:
+        os.write(typing_end, b"a")
+        key = reader.poll_key()
+
+    assert key is None
 
 
 def test_reader_restores_the_terminal_settings_on_exit(terminal):

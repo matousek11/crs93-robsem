@@ -21,6 +21,7 @@ hoop_guide/              # main package
 ├── ui.py                # terminal UI built on rich
 ├── keyboard.py          # single key presses from the terminal, stop key c while a mode runs
 ├── manual_mode.py       # manual move of the hoop from the keyboard, recording of calibration points
+├── puzzle_mode.py       # run of one puzzle: table motion, hoop path along the rod, robot moves
 ├── logs.py              # logging, one folder per run in runs/
 ├── types.py             # shared NewTypes: Image, PixelPoints, Points3D, Homography, Pose, ...
 ├── geometry.py          # transforms, rotation about an axis
