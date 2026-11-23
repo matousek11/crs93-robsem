@@ -191,19 +191,67 @@ def test_detect_hoop_center_finds_center_accurately():
     assert center[1] == pytest.approx(220.0, abs=1.0)
 
 
-def test_detect_hoop_center_selects_largest_contour():
+def test_detect_hoop_center_ignores_small_and_angular_shapes():
     image = Image(blank_image())
-    # Noise shapes.
     cv2.circle(image, (50, 50), 5, (0, 0, 0), thickness=-1)
     cv2.rectangle(image, (250, 60), (270, 80), (0, 0, 0), thickness=-1)
-    # Dominant hoop.
     cv2.circle(image, (160, 200), 45, (0, 0, 0), thickness=10)
 
     center = detect_hoop_center(image)
 
-    assert center is not None
-    assert center[0] == pytest.approx(160.0, abs=1.0)
-    assert center[1] == pytest.approx(200.0, abs=1.0)
+    assert center == pytest.approx((160.0, 200.0), abs=1.0)
+
+
+def test_detect_hoop_center_prefers_the_hoop_to_a_larger_dark_gripper():
+    # Reproduces the largest dark contour winning over the hoop.
+    image = Image(blank_image())
+    cv2.rectangle(image, (120, 10), (330, 150), (30, 30, 30), thickness=-1)
+    cv2.circle(image, (200, 280), 50, (0, 0, 0), thickness=3)
+
+    center = detect_hoop_center(image)
+
+    assert center == pytest.approx((200.0, 280.0), abs=1.0)
+
+
+def test_detect_hoop_center_finds_a_thin_light_hoop_under_uneven_light():
+    # Brightness falls from 250 to 110 across the image and the hoop line is
+    # only 40 gray levels darker than the table around it, so no single
+    # threshold separates it.
+    brightness = np.linspace(250.0, 110.0, CANVAS_SIZE)
+    table = np.tile(brightness, (CANVAS_SIZE, 1))
+    hoop_line = np.zeros((CANVAS_SIZE, CANVAS_SIZE), dtype=np.uint8)
+    cv2.circle(hoop_line, (220, 190), 60, 255, thickness=3)
+    gray = np.where(hoop_line > 0, table - 40.0, table).astype(np.uint8)
+    image = Image(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR).astype(np.uint8))
+
+    center = detect_hoop_center(image)
+
+    assert center == pytest.approx((220.0, 190.0), abs=1.0)
+
+
+def test_detect_hoop_center_is_not_shifted_by_the_handle_joint():
+    # A bump on one side moves the smallest enclosing circle by 4 px.
+    image = Image(blank_image())
+    cv2.circle(image, (200, 220), 60, (0, 0, 0), thickness=3)
+    cv2.circle(image, (200, 156), 6, (0, 0, 0), thickness=-1)
+
+    center = detect_hoop_center(image)
+
+    assert center == pytest.approx((200.0, 220.0), abs=1.0)
+
+
+def test_detect_hoop_center_returns_none_for_an_open_arc():
+    image = Image(blank_image())
+    cv2.ellipse(image, (200, 200), (80, 80), 0, 0, 120, (0, 0, 0), thickness=3)
+
+    assert detect_hoop_center(image) is None
+
+
+def test_detect_hoop_center_returns_none_for_a_marker_only():
+    image = blank_image()
+    add_marker(image, 5, left=150, top=150)
+
+    assert detect_hoop_center(Image(image)) is None
 
 
 def test_detect_hoop_center_returns_none_on_blank_image():
