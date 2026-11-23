@@ -9,8 +9,16 @@ import dataclasses
 import math
 from collections.abc import Sequence
 
+import numpy as np
+from numpy.typing import NDArray
+
 from hoop_guide.geometry import get_cosine_and_sine
+from hoop_guide.geometry import rotation_about_axis
+from hoop_guide.types import Directions3D
 from hoop_guide.types import Homography
+from hoop_guide.types import PlateDirections3D
+from hoop_guide.types import PlatePoints3D
+from hoop_guide.types import Points3D
 from hoop_guide.vision import MarkerDetection
 from hoop_guide.vision import image_to_plane
 
@@ -101,3 +109,37 @@ def _pose_from_marker(
         y=float(center[1] - (sine * offset_x + cosine * offset_y)),
         heading=heading,
     )
+
+
+def plate_to_robot_points(
+    points: PlatePoints3D, plate: PlatePose, plate_height: float
+) -> Points3D:
+    """Moves points from the plate frame into the robot frame.
+
+    Args:
+        points: Points in the plate frame, shape (N, 3) [m].
+        plate: Pose of the plate.
+        plate_height: Height of the plate top surface above the robot base
+            [m].
+    """
+    translation = np.array([plate.x, plate.y, plate_height])
+    return Points3D(_turn_with_plate(points, plate) + translation)
+
+
+def plate_to_robot_directions(
+    directions: PlateDirections3D, plate: PlatePose
+) -> Directions3D:
+    """Turns directions from the plate frame into the robot frame.
+
+    Args:
+        directions: Unit vectors in the plate frame, shape (N, 3).
+        plate: Pose of the plate.
+    """
+    return Directions3D(_turn_with_plate(directions, plate))
+
+
+def _turn_with_plate(
+    vectors: NDArray[np.float64], plate: PlatePose
+) -> NDArray[np.float64]:
+    rotation = rotation_about_axis(2, plate.heading)
+    return np.asarray(vectors @ rotation.T, dtype=np.float64)

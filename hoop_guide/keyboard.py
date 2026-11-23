@@ -25,6 +25,7 @@ class Key(enum.Enum):
     RIGHT = "right"
     ENTER = "enter"
     SPACE = "space"
+    STOP = "stop"
 
 
 # Arrows start with ESC [ in the normal and ESC O in the application mode
@@ -41,6 +42,8 @@ _KEY_BY_CHARACTERS = {
     "\r": Key.ENTER,
     "\n": Key.ENTER,
     " ": Key.SPACE,
+    "c": Key.STOP,
+    "C": Key.STOP,
 }
 
 
@@ -104,6 +107,21 @@ class TerminalKeyReader:
             if key is not None:
                 return key
 
+    def poll_key(self) -> Key | None:
+        """Returns a waiting key press at once, keys without a meaning skipped.
+
+        Returns:
+            The key, None when no key with a meaning is waiting.
+
+        Raises:
+            EOFError: The terminal was closed.
+        """
+        while self._has_input(timeout=0.0):
+            key = parse_key(self._read_key_characters())
+            if key is not None:
+                return key
+        return None
+
     def discard_pending(self) -> None:
         """Drops key presses that arrived while nobody was reading."""
         termios.tcflush(self._file_descriptor, termios.TCIFLUSH)
@@ -112,7 +130,9 @@ class TerminalKeyReader:
         characters = self._read_character()
         if characters != ESCAPE:
             return characters
-        while len(characters) < ESCAPE_SEQUENCE_LENGTH and self._has_input():
+        while len(characters) < ESCAPE_SEQUENCE_LENGTH and self._has_input(
+            timeout=ESCAPE_SEQUENCE_TIMEOUT
+        ):
             characters += self._read_character()
         return characters
 
@@ -122,8 +142,6 @@ class TerminalKeyReader:
             raise EOFError("Terminal was closed.")
         return data.decode("latin-1")
 
-    def _has_input(self) -> bool:
-        readable, _, _ = select.select(
-            [self._file_descriptor], [], [], ESCAPE_SEQUENCE_TIMEOUT
-        )
+    def _has_input(self, timeout: float) -> bool:
+        readable, _, _ = select.select([self._file_descriptor], [], [], timeout)
         return bool(readable)

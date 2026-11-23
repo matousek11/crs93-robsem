@@ -20,6 +20,7 @@ from hoop_guide.manual_mode import ManualMode
 from hoop_guide.planning import Planning
 from hoop_guide.plate import PlatePose
 from hoop_guide.plate import estimate_plate_pose
+from hoop_guide.puzzle_mode import PuzzleMode
 from hoop_guide.types import Homography
 from hoop_guide.ui import RichManualDisplay
 from hoop_guide.ui import RichUI
@@ -67,10 +68,14 @@ def main() -> int:
             f" Details in {run_dir / LOG_FILE_NAME}."
         )
         return 1
+    homography = _try_load_homography()
     with contextlib.ExitStack() as stack:
         extra_actions: list[tuple[str, Callable[[], None]]] = []
+        camera_stream: CameraStream | None = None
         if robot.is_real:
-            on_frame = _create_frame_handler(stack, config.should_show_view)
+            on_frame = _create_frame_handler(
+                stack, config.should_show_view, homography
+            )
             camera_stream = stack.enter_context(
                 CameraStream(robot, process_image, on_frame)
             )
@@ -82,12 +87,28 @@ def main() -> int:
                 DEFAULT_HOMOGRAPHY_FILE,
             )
             extra_actions.append(("Manual move", manual_mode.run))
-        App(config, robot, ui, run_dir, extra_actions).run()
+        App(
+            config,
+            robot,
+            ui,
+            run_dir,
+            puzzle_mode=PuzzleMode(
+                Planning(robot),
+                robot,
+                camera_stream,
+                TerminalKeyReader(),
+                ui,
+                homography=homography,
+            ),
+            extra_actions=extra_actions,
+        ).run()
     return 0
 
 
 def _create_frame_handler(
-    stack: contextlib.ExitStack[bool | None], should_show_view: bool
+    stack: contextlib.ExitStack[bool | None],
+    should_show_view: bool,
+    homography: Homography | None,
 ) -> Callable[[Frame], None]:
     """Returns what to do with every Frame, opens the window if shown.
 
@@ -98,7 +119,6 @@ def _create_frame_handler(
         return lambda frame: None
     viewer = stack.enter_context(Viewer())
     fps_meter = FpsMeter()
-    homography = _try_load_homography()
     samples: deque[tuple[float, PlatePose]] = deque(maxlen=10)
 
     def show(frame: Frame) -> None:
