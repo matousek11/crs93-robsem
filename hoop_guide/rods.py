@@ -16,7 +16,7 @@ from numpy.typing import NDArray
 from hoop_guide.types import PlateDirections3D
 from hoop_guide.types import PlatePoints3D
 
-STOP_HEIGHT = 0.035
+STOP_HEIGHT = 0.04
 """Target height of the hoop center above the plate [m], used by planning."""
 
 

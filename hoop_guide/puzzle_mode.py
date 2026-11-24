@@ -24,12 +24,24 @@ PLATE_HEIGHT: float | None = 0.07
 """Height of the plate top surface above the robot base frame origin, the
 surface the robot stands on [m]."""
 
-# TODO: measure in the lab, the log has the expected and the real time of
-# every step.
-MOVE_OVERHEAD = 0.03
-"""Time a step takes on top of the move at full joint speeds [s].
+# Measured in the lab on 2026-11-24, puzzle A2, from the expected and the
+# real step times in app.log. With an overhead of 0.03 s and no factor the
+# hoop lagged visibly behind the rod center at the synchronization point.
+# The smallest steps, 0.01 s at full joint speeds, took 0.29 to 0.30 s.
+# The move from home to the synchronization point, 3.94 s at full joint
+# speeds, took 5.32 s: 1.27 times longer after the overhead. Steps of 2 cm
+# down the rod were not in that log, refine both when they are.
+MOVE_OVERHEAD = 0.3
+"""Time every step takes on top of its move, however small [s].
 
-Communication with the controller, speeding up and slowing down.
+Communication with the controller, waiting for its ready flag and
+settling.
+"""
+
+MOVE_TIME_FACTOR = 1.3
+"""How many times longer a move takes than at full joint speeds.
+
+The joints speed up and slow down, see MOVE_OVERHEAD for the measurement.
 """
 
 MEASUREMENT_TIMEOUT = 15.0
@@ -146,8 +158,8 @@ class PuzzleMode:
     Then it goes down the rod point by point, follows the last point for
     BOTTOM_WAIT, goes back out to the synchronization point and returns
     home. Every step is aimed where the rod is when the robot arrives, the
-    time of the move at full joint speeds plus MOVE_OVERHEAD, and waits
-    until the robot stands still.
+    time of the move at full joint speeds times MOVE_TIME_FACTOR plus
+    MOVE_OVERHEAD, and waits until the robot stands still.
 
     The c key stops the run where it is before the hoop goes down. On the
     rod it and an unreachable point both turn the hoop back out of the rod,
@@ -212,7 +224,7 @@ class PuzzleMode:
             reached_index = self._go_down(planner, last_index)
             if not self._go_back_out(planner, reached_index):
                 return
-        self._reporter.info("Puzzle done, returning home.")
+        self._info("Puzzle done, returning home.")
         self._robot.soft_home()
 
     def _missing_requirement(self) -> str:
@@ -227,7 +239,7 @@ class PuzzleMode:
         self, frames: FrameSource, homography: Homography
     ) -> TableMotion | None:
         """Collects plate poses from new frames, None when stopped or late."""
-        self._reporter.info(
+        self._info(
             f"Measuring the table motion from {PLATE_SAMPLE_COUNT} frames..."
         )
         tracker = PlateTracker(homography)
@@ -235,7 +247,7 @@ class PuzzleMode:
         last_timestamp: float | None = None
         while tracker.motion is None:
             if self._keyboard.poll_key() is Key.STOP:
-                self._reporter.info("Stopped.")
+                self._info("Stopped.")
                 return None
             if self._clock.now() > deadline:
                 self._warn(
@@ -249,7 +261,7 @@ class PuzzleMode:
                 last_timestamp = frame.timestamp
             self._clock.sleep(FRAME_POLL_PERIOD)
         direction = "left" if tracker.motion.is_rotating_leftwise else "right"
-        self._reporter.info(
+        self._info(
             f"The table turns {direction} at"
             f" {abs(tracker.motion.angular_velocity):.3f} rad/s."
         )
@@ -257,10 +269,10 @@ class PuzzleMode:
 
     def _synchronize(self, planner: RodPlanner) -> bool:
         """Follows the synchronization point until Enter, False when stopped."""
-        self._reporter.info("Moving to the synchronization point.")
+        self._info("Moving to the synchronization point.")
         try:
             self._step(planner, _SYNC_INDEX)
-            self._reporter.info(
+            self._info(
                 "At the synchronization point. Press Enter to go down the rod,"
                 " c to stop."
             )
@@ -269,7 +281,7 @@ class PuzzleMode:
                 if key is Key.ENTER:
                     return True
                 if key is Key.STOP:
-                    self._reporter.info("Stopped.")
+                    self._info("Stopped.")
                     return False
                 self._step(planner, _SYNC_INDEX)
         except (NoJointConfigError, ValueError) as error:
@@ -278,19 +290,19 @@ class PuzzleMode:
 
     def _go_down(self, planner: RodPlanner, last_index: int) -> int:
         """Goes down the rod, returns the last path point reached."""
-        self._reporter.info("Going down the rod, press c to go back out.")
+        self._info("Going down the rod, press c to go back out.")
         reached_index = _SYNC_INDEX
         try:
             for index in range(_SYNC_INDEX + 1, last_index + 1):
                 if self._keyboard.poll_key() is Key.STOP:
-                    self._reporter.info("Stopped, going back out.")
+                    self._info("Stopped, going back out.")
                     return reached_index
                 self._step(planner, index)
                 reached_index = index
             wait_end = self._clock.now() + BOTTOM_WAIT
             while self._clock.now() < wait_end:
                 if self._keyboard.poll_key() is Key.STOP:
-                    self._reporter.info("Stopped, going back out.")
+                    self._info("Stopped, going back out.")
                     return reached_index
                 self._step(planner, last_index)
         except (NoJointConfigError, ValueError) as error:
@@ -303,7 +315,7 @@ class PuzzleMode:
         Starts one point above reached_index, the hoop is already there. The c
         key is ignored, the hoop must leave the rod.
         """
-        self._reporter.info("Going back out of the rod.")
+        self._info("Going back out of the rod.")
         try:
             for index in range(reached_index - 1, _SYNC_INDEX - 1, -1):
                 self._step(planner, index)
@@ -327,7 +339,10 @@ class PuzzleMode:
         # The arrival time depends on the target, one estimate is enough
         # because the table hardly moves in the difference.
         estimate = planner.update(sent_time + MOVE_OVERHEAD, index)[0]
-        lead_time = self._motion.get_move_time(estimate) + MOVE_OVERHEAD
+        lead_time = (
+            MOVE_TIME_FACTOR * self._motion.get_move_time(estimate)
+            + MOVE_OVERHEAD
+        )
         self._motion.move_to_ik(planner.update(sent_time + lead_time, index)[0])
         while self._motion.is_in_motion():
             self._clock.sleep(MOTION_POLL_PERIOD)
@@ -337,6 +352,10 @@ class PuzzleMode:
             lead_time,
             self._clock.now() - sent_time,
         )
+
+    def _info(self, message: str) -> None:
+        logger.info(message)
+        self._reporter.info(message)
 
     def _warn(self, message: str) -> None:
         logger.warning(message)
