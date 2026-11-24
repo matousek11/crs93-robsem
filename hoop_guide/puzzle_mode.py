@@ -31,7 +31,10 @@ surface the robot stands on [m]."""
 # The move from home to the synchronization point, 3.94 s at full joint
 # speeds, took 5.32 s: 1.27 times longer after the overhead. Steps of 2 cm
 # down the rod were not in that log, refine both when they are.
-MOVE_OVERHEAD = 0.3
+# In the second test that day, with 0.3 s, the hoop was slightly ahead of the
+# rod, about the same all the time: the ready flag of the controller comes
+# later than the robot stops. Lowered to 0.25 s, tune further.
+MOVE_OVERHEAD = 0.25
 """Time every step takes on top of its move, however small [s].
 
 Communication with the controller, waiting for its ready flag and
