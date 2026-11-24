@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
+from hoop_guide.control import MOVE_OVERHEAD
+from hoop_guide.control import MOVE_TIME_FACTOR
 from hoop_guide.control import MotionController
+from hoop_guide.control import get_lead_time
 from hoop_guide.control import get_move_time
 from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
@@ -18,6 +21,10 @@ class FakeRobot:
     @property
     def joint_speeds(self):
         return JointSpeeds(np.ones(6))
+
+    @property
+    def joint_limits(self):
+        return JointConfig(np.full(6, -10.0)), JointConfig(np.full(6, 10.0))
 
     def get_joint_angles(self):
         return self.joint_angles
@@ -118,3 +125,16 @@ def test_move_time_with_a_speed_that_is_not_positive_raises(speed):
 
     with pytest.raises(ValueError, match="positive"):
         get_move_time(START, START, joint_speeds)
+
+
+# get_lead_time
+
+
+def test_lead_time_of_no_move_is_the_overhead():
+    assert get_lead_time(0.0) == pytest.approx(MOVE_OVERHEAD)
+
+
+def test_lead_time_grows_with_the_move_by_the_factor():
+    assert get_lead_time(2.0) - get_lead_time(1.0) == pytest.approx(
+        MOVE_TIME_FACTOR
+    )

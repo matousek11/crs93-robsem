@@ -144,6 +144,14 @@ class Robot:
         joint_config = self.get_joint_angles()
         return Pose(np.asarray(self._crs.fk(joint_config), dtype=np.float64))
 
+    @property
+    def joint_limits(self) -> tuple[JointConfig, JointConfig]:
+        """Lowest and highest angle of every joint [rad]."""
+        return (
+            JointConfig(np.asarray(self._crs.q_min, dtype=np.float64)),
+            JointConfig(np.asarray(self._crs.q_max, dtype=np.float64)),
+        )
+
     def is_in_limits(self, joint_config: JointConfig) -> bool:
         """Returns True if every joint angle is within its limits."""
         return bool(self._crs.in_limits(joint_config))

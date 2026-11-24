@@ -65,11 +65,12 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 1. Checks that the camera, a saved homography and `PLATE_HEIGHT` in `hoop_guide/puzzle_mode.py` are there, otherwise nothing moves.
 2. Measures the table motion from the first 50 frames with the plate, right at the start. The arm must not hide the markers. Without the plate for 15 s the mode ends.
 3. Moves the hoop to the synchronization point, 10 cm above the free end of the rod, and follows the rotation there.
-4. Enter starts the way down the rod, point by point every 2 cm.
-5. At 3.5 cm above the plate the hoop follows the rotation for 1 s.
-6. Goes back up the rod to the synchronization point and then home.
+4. Enter simulates the whole run down the rod and back for starts in the next 20 s and picks the first one where every point is reachable and no joint flips. The hoop follows the synchronization point until then. Without such a start a warning is shown, Enter searches again.
+5. At the start the hoop goes down the rod point by point, every step planned again from the real time and joint angles.
+6. At 4 cm above the plate the hoop follows the rotation for 1 s.
+7. Goes back up the rod to the synchronization point and then home.
 
-Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs` plus a fixed overhead (`MOVE_OVERHEAD`). The next step is sent when the robot stands still. The log has the expected and the real time of every step.
+Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs`, times `MOVE_TIME_FACTOR` for speeding up and slowing down, plus `MOVE_OVERHEAD`. The next step is sent when the robot stands still. The log has the expected and the real time of every step.
 
 ## Manual move
 

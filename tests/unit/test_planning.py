@@ -16,6 +16,7 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import PlatePose
 from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
+from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
 from hoop_guide.types import Pose
 
@@ -42,6 +43,10 @@ class FakeRobot:
     @property
     def joint_speeds(self):
         return JointSpeeds(np.ones(6))
+
+    @property
+    def joint_limits(self):
+        return JointConfig(np.full(6, -10.0)), JointConfig(np.full(6, 10.0))
 
     def get_joint_angles(self):
         return np.array(START_JOINT_ANGLES)
@@ -132,6 +137,30 @@ def test_move_time_uses_the_option_move_to_ik_sends():
     # Fake joint speeds are 1 rad/s, the largest change is 0.05 rad.
     assert move_time == pytest.approx(0.05)
     assert robot.commands == []
+
+
+def test_chosen_config_is_the_option_nearest_to_the_given_angles():
+    near_start = np.array(START_JOINT_ANGLES) + 0.05
+    near_given = np.full(6, -0.8)
+    robot = FakeRobot([near_start, near_given])
+
+    config = Planning(robot).choose_joint_config(
+        HOOP_POSE, JointConfig(np.full(6, -0.9))
+    )
+
+    np.testing.assert_allclose(config, near_given)
+
+
+def test_joint_speeds_limits_and_angles_are_the_robot_ones():
+    robot = FakeRobot()
+    planning = Planning(robot)
+
+    np.testing.assert_allclose(planning.joint_speeds, robot.joint_speeds)
+    for planning_limit, robot_limit in zip(
+        planning.joint_limits, robot.joint_limits, strict=True
+    ):
+        np.testing.assert_allclose(planning_limit, robot_limit)
+    np.testing.assert_allclose(planning.get_joint_angles(), START_JOINT_ANGLES)
 
 
 def test_move_time_of_an_unreachable_pose_raises():
@@ -333,6 +362,20 @@ def test_start_index_drops_the_passed_points():
     assert len(rest) == len(whole_path) - 5
     for rest_pose, path_pose in zip(rest, whole_path[5:], strict=True):
         np.testing.assert_allclose(rest_pose, path_pose, atol=1e-12)
+
+
+def test_pose_of_one_point_is_that_point_of_the_rest_of_the_path():
+    planner = make_planner(Puzzle.B, TURNING_TABLE)
+
+    hoop_pose = planner.get_hoop_pose(1.5, 4)
+
+    np.testing.assert_allclose(hoop_pose, planner.update(1.5, 4)[0])
+
+
+def test_point_count_is_the_length_of_the_whole_path():
+    planner = make_planner(Puzzle.B)
+
+    assert planner.point_count == len(planner.update(0.0, 0))
 
 
 def test_start_index_outside_the_path_raises():

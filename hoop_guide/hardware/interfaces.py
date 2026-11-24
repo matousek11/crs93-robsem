@@ -67,6 +67,10 @@ class JointMotion(Protocol):
         of reach.
         """
 
+    @property
+    def joint_limits(self) -> tuple[JointConfig, JointConfig]:
+        """Lowest and highest angle of every joint [rad]."""
+
     def is_in_limits(self, joint_config: JointConfig) -> bool:
         """Returns True if every joint angle is within its limits."""
 
