@@ -4,6 +4,7 @@ from typing import Protocol
 
 from hoop_guide.types import Image
 from hoop_guide.types import JointConfig
+from hoop_guide.types import JointSpeeds
 from hoop_guide.types import Pose
 
 
@@ -43,6 +44,10 @@ class RobotControl(Protocol):
 
 class JointMotion(Protocol):
     """Reading and commanding the joint angles of the robot."""
+
+    @property
+    def joint_speeds(self) -> JointSpeeds:
+        """Speeds of the joints in a move [rad/s]."""
 
     def get_joint_angles(self) -> JointConfig:
         """Returns the joint angles measured by the controller."""

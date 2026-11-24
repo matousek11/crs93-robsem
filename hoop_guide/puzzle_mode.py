@@ -24,12 +24,12 @@ PLATE_HEIGHT: float | None = 0.07
 """Height of the plate top surface above the robot base frame origin, the
 surface the robot stands on [m]."""
 
-MOVE_LEAD_TIME = 0.35
-"""Time from sending one path step to the robot arriving there [s].
+# TODO: measure in the lab, the log has the expected and the real time of
+# every step.
+MOVE_OVERHEAD = 0.03
+"""Time a step takes on top of the move at full joint speeds [s].
 
-The poses are predicted for this time ahead. Estimated from the default
-speed of joint B in ctu_crs (7.2 deg/s) for a 2 cm step, to be measured in
-the lab.
+Communication with the controller, speeding up and slowing down.
 """
 
 MEASUREMENT_TIMEOUT = 15.0
@@ -56,6 +56,13 @@ class PuzzleMotion(Protocol):
         Raises:
             NoJointConfigError: The pose cannot be reached, nothing is sent
                 to the robot.
+        """
+
+    def get_move_time(self, hoop_pose: Pose) -> float:
+        """Returns how long move_to_ik to the pose takes at full joint speeds.
+
+        Raises:
+            NoJointConfigError: The pose cannot be reached.
         """
 
     def is_in_motion(self) -> bool:
@@ -138,8 +145,9 @@ class PuzzleMode:
     rod and follows the rotation there until the operator presses Enter.
     Then it goes down the rod point by point, follows the last point for
     BOTTOM_WAIT, goes back out to the synchronization point and returns
-    home. Every step is predicted MOVE_LEAD_TIME ahead and waits until the
-    robot stands still.
+    home. Every step is aimed where the rod is when the robot arrives, the
+    time of the move at full joint speeds plus MOVE_OVERHEAD, and waits
+    until the robot stands still.
 
     The c key stops the run where it is before the hoop goes down. On the
     rod it and an unreachable point both turn the hoop back out of the rod,
@@ -315,10 +323,20 @@ class PuzzleMode:
             NoJointConfigError: The point cannot be reached.
             ValueError: The planner cannot give a pose for the point.
         """
-        target_time = self._clock.now() + MOVE_LEAD_TIME
-        self._motion.move_to_ik(planner.update(target_time, index)[0])
+        sent_time = self._clock.now()
+        # The arrival time depends on the target, one estimate is enough
+        # because the table hardly moves in the difference.
+        estimate = planner.update(sent_time + MOVE_OVERHEAD, index)[0]
+        lead_time = self._motion.get_move_time(estimate) + MOVE_OVERHEAD
+        self._motion.move_to_ik(planner.update(sent_time + lead_time, index)[0])
         while self._motion.is_in_motion():
             self._clock.sleep(MOTION_POLL_PERIOD)
+        logger.info(
+            "Step to path point %d: expected %.3f s, took %.3f s.",
+            index,
+            lead_time,
+            self._clock.now() - sent_time,
+        )
 
     def _warn(self, message: str) -> None:
         logger.warning(message)

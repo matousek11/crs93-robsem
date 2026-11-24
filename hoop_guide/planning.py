@@ -5,6 +5,7 @@ import math
 import numpy as np
 from numpy.typing import NDArray
 
+from hoop_guide import control
 from hoop_guide.estimation import TableMotion
 from hoop_guide.hardware.interfaces import JointMotion
 from hoop_guide.models.hoop_mount import FLANGE_TO_HOOP
@@ -14,6 +15,7 @@ from hoop_guide.plate import plate_to_robot_points
 from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
 from hoop_guide.rods import rod_centerline
+from hoop_guide.types import JointConfig
 from hoop_guide.types import PlateDirections3D
 from hoop_guide.types import PlatePoints3D
 from hoop_guide.types import Pose
@@ -62,6 +64,40 @@ class Planning:
             NoJointConfigError: The pose is out of reach or only beyond the
                 joint limits. Nothing is sent to the robot.
         """
+        picked_config = self._choose_joint_config(hoop_pose)
+
+        # 5. move robot to new configurations
+        self.robot.set_joint_angles(picked_config)
+
+    def get_move_time(self, hoop_pose: Pose) -> float:
+        """Returns how long move_to_ik to the pose takes at full joint speeds.
+
+        Uses the joint configuration move_to_ik picks. Speeding up and
+        slowing down are not included.
+
+        Args:
+            hoop_pose: Target pose of the hoop in the robot frame.
+
+        Returns:
+            Time of the move [s].
+
+        Raises:
+            NoJointConfigError: The pose is out of reach or only beyond the
+                joint limits.
+        """
+        return control.get_move_time(
+            self.robot.get_joint_angles(),
+            self._choose_joint_config(hoop_pose),
+            self.robot.joint_speeds,
+        )
+
+    def _choose_joint_config(self, hoop_pose: Pose) -> JointConfig:
+        """Returns the reaching configuration nearest to the joint angles now.
+
+        Raises:
+            NoJointConfigError: The pose is out of reach or only beyond the
+                joint limits.
+        """
         # 1. get available configurations from crs library
         flange_pose = self.hoop_mount.to_flange_pose(hoop_pose)
         possible_configs = self.robot.get_ik_options(flange_pose)
@@ -92,10 +128,7 @@ class Planning:
 
             avg_change.append(new_conf_change_sum / len(curr_config))
 
-        picked_config = possible_configs[avg_change.index(min(avg_change))]
-
-        # 5. move robot to new configurations
-        self.robot.set_joint_angles(picked_config)
+        return possible_configs[avg_change.index(min(avg_change))]
 
     def get_hoop_pose(self) -> Pose:
         """Returns the hoop pose computed from the measured joint angles."""

@@ -39,6 +39,10 @@ Pose = NewType("Pose", NDArray[np.float64])
 JointConfig = NewType("JointConfig", NDArray[np.float64])
 """Joint angles of the robot from the base to the flange, shape (6,), rad."""
 
+JointSpeeds = NewType("JointSpeeds", NDArray[np.float64])
+"""Speeds of the robot joints from the base to the flange, shape (6,),
+rad/s."""
+
 Point3D = NewType("Point3D", NDArray[np.float64])
 """One point in the robot frame, shape (3,), meters."""
 

@@ -16,6 +16,7 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import PlatePose
 from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
+from hoop_guide.types import JointSpeeds
 from hoop_guide.types import Pose
 
 JOINT_LIMIT = 1.0  # [rad]
@@ -37,6 +38,10 @@ class FakeRobot:
         self.commands = []
         self.ik_flange_poses = []
         self._ik_options = list(ik_options)
+
+    @property
+    def joint_speeds(self):
+        return JointSpeeds(np.ones(6))
 
     def get_joint_angles(self):
         return np.array(START_JOINT_ANGLES)
@@ -115,6 +120,23 @@ def test_move_to_ik_unreachable_pose_raises_and_sends_nothing(ik_options):
         Planning(robot).move_to_ik(HOOP_POSE)
 
     assert robot.commands == []
+
+
+def test_move_time_uses_the_option_move_to_ik_sends():
+    far = np.full(6, -0.9)
+    near = np.array(START_JOINT_ANGLES) + [0.0, 0.05, 0.0, 0.0, 0.0, 0.02]
+    robot = FakeRobot([far, near])
+
+    move_time = Planning(robot).get_move_time(HOOP_POSE)
+
+    # Fake joint speeds are 1 rad/s, the largest change is 0.05 rad.
+    assert move_time == pytest.approx(0.05)
+    assert robot.commands == []
+
+
+def test_move_time_of_an_unreachable_pose_raises():
+    with pytest.raises(NoJointConfigError):
+        Planning(FakeRobot()).get_move_time(HOOP_POSE)
 
 
 def test_get_hoop_pose_is_the_measured_flange_pose_moved_to_the_hoop():
