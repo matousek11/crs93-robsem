@@ -6,6 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from hoop_guide import control
+from hoop_guide.collision import CollisionCheck
 from hoop_guide.estimation import TableMotion
 from hoop_guide.hardware.interfaces import JointMotion
 from hoop_guide.models.hoop_mount import FLANGE_TO_HOOP
@@ -50,20 +51,23 @@ class Planning:
     def __init__(self, robot: JointMotion) -> None:
         self.robot: JointMotion = robot
         self.hoop_mount: HoopMount = HoopMount(FLANGE_TO_HOOP)
+        self.collision_check: CollisionCheck = CollisionCheck(robot)
 
     def move_to_ik(self, hoop_pose: Pose) -> None:
         """Starts a move that puts the hoop into the pose.
 
-        Of the joint configurations within the joint limits, the one with
-        the smallest mean absolute change of the joint angles is used.
-        Returns at once, before the robot arrives.
+        Of the joint configurations within the joint limits that keep the
+        robot and the hoop above the table (CollisionCheck), the one with the
+        smallest mean absolute change of the joint angles is used. Returns at
+        once, before the robot arrives.
 
         Args:
             hoop_pose: Target pose of the hoop in the robot frame.
 
         Raises:
-            NoJointConfigError: The pose is out of reach or only beyond the
-                joint limits. Nothing is sent to the robot.
+            NoJointConfigError: The pose is out of reach, or only beyond the
+                joint limits or below the table. Nothing is sent to the
+                robot.
         """
         picked_config = self.choose_joint_config(
             hoop_pose, self.robot.get_joint_angles()
@@ -85,8 +89,8 @@ class Planning:
             Time of the move [s].
 
         Raises:
-            NoJointConfigError: The pose is out of reach or only beyond the
-                joint limits.
+            NoJointConfigError: The pose is out of reach, or only beyond the
+                joint limits or below the table.
         """
         joint_angles = self.robot.get_joint_angles()
         return control.get_move_time(
@@ -114,27 +118,30 @@ class Planning:
     ) -> JointConfig:
         """Returns the reaching configuration nearest to the joint angles.
 
-        Of the joint configurations within the joint limits, the one with
-        the smallest mean absolute change from joint_angles.
+        Of the joint configurations within the joint limits that keep the
+        robot and the hoop above the table (CollisionCheck), the one with the
+        smallest mean absolute change from joint_angles.
 
         Args:
             hoop_pose: Target pose of the hoop in the robot frame.
             joint_angles: Joint angles the move starts from [rad].
 
         Raises:
-            NoJointConfigError: The pose is out of reach or only beyond the
-                joint limits.
+            NoJointConfigError: The pose is out of reach, or only beyond the
+                joint limits or below the table.
         """
         # 1. get available configurations from crs library
         flange_pose = self.hoop_mount.to_flange_pose(hoop_pose)
         possible_configs = self.robot.get_ik_options(flange_pose)
 
-        # 2. cut-off configurations beyond the joint limits
-        # TODO: cut-off configurations that hit an obstacle too
+        # 2. cut-off configurations beyond the joint limits and below the
+        # table, see CollisionCheck
+        # TODO: cut-off configurations that hit the rod too
         possible_configs = [
             config
             for config in possible_configs
             if self.robot.is_in_limits(config)
+            and self.collision_check.is_free(config, hoop_pose)
         ]
 
         # 3. stop when no config remained

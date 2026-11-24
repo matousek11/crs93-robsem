@@ -31,6 +31,7 @@ hoop_guide/              # main package
 ├── calibration.py       # calibration from point pairs, collecting the pairs
 ├── estimation.py        # center of rotation, ω, phase, pose prediction
 ├── planning.py          # hoop path along the rod, handle orientation
+├── collision.py         # robot and hoop above the table
 ├── control.py           # tracking loop, step timing
 ├── run_schedule.py      # start time of a run, found by simulating the whole run
 ├── camera_stream.py     # background thread: grab, timestamp, process, keep the latest Frame

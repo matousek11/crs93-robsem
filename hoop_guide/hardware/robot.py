@@ -8,6 +8,7 @@ from ctu_crs.crs_robot import CRSRobot
 from hoop_guide.types import Image
 from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
+from hoop_guide.types import Points3D
 from hoop_guide.types import Pose
 
 ROBOT_CLASSES: dict[str, type[CRSRobot]] = {"crs93": CRS93, "crs97": CRS97}
@@ -135,6 +136,27 @@ class Robot:
             JointConfig(np.asarray(joint_config, dtype=np.float64))
             for joint_config in self._crs.ik(flange_pose)
         ]
+
+    def get_link_points(self, joint_config: JointConfig) -> Points3D:
+        """Returns the origins of the joint frames of a joint configuration.
+
+        From the DH model of ctu_crs, the same chain as its fk. Shape (6, 3)
+        in the robot frame [m]: the frames after joints 1 to 6, the last one
+        is the flange. The base, which stands on the table, is not included.
+        """
+        pose = np.eye(4)
+        points = []
+        for d, a, alpha, offset, joint_angle in zip(
+            self._crs.dh_d,
+            self._crs.dh_a,
+            self._crs.dh_alpha,
+            self._crs.dh_offset,
+            joint_config,
+            strict=True,
+        ):
+            pose = pose @ self._crs.dh_to_se3(d, joint_angle + offset, a, alpha)
+            points.append(pose[:3, 3].copy())
+        return Points3D(np.array(points))
 
     def get_fk_pos(self) -> Pose:
         """Returns the flange pose computed from the measured joint angles.

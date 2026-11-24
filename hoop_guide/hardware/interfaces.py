@@ -5,6 +5,7 @@ from typing import Protocol
 from hoop_guide.types import Image
 from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
+from hoop_guide.types import Points3D
 from hoop_guide.types import Pose
 
 
@@ -73,6 +74,12 @@ class JointMotion(Protocol):
 
     def is_in_limits(self, joint_config: JointConfig) -> bool:
         """Returns True if every joint angle is within its limits."""
+
+    def get_link_points(self, joint_config: JointConfig) -> Points3D:
+        """Returns the origins of the joint frames, the last one the flange.
+
+        Shape (6, 3) in the robot frame [m], the base is not included.
+        """
 
     def get_fk_pos(self) -> Pose:
         """Returns the flange pose computed from the measured joint angles."""
