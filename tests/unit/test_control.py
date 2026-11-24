@@ -8,6 +8,7 @@ from hoop_guide.control import get_lead_time
 from hoop_guide.control import get_move_time
 from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
+from hoop_guide.types import Points3D
 
 JOINT_LIMIT = 1.0  # [rad]
 START_JOINT_ANGLES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
@@ -25,6 +26,9 @@ class FakeRobot:
     @property
     def joint_limits(self):
         return JointConfig(np.full(6, -10.0)), JointConfig(np.full(6, 10.0))
+
+    def get_link_points(self, joint_config):
+        return Points3D(np.full((6, 3), 0.5))
 
     def get_joint_angles(self):
         return self.joint_angles

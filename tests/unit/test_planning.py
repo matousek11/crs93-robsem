@@ -18,11 +18,22 @@ from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
 from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
+from hoop_guide.types import Points3D
 from hoop_guide.types import Pose
 
 JOINT_LIMIT = 1.0  # [rad]
 START_JOINT_ANGLES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-HOOP_POSE = Pose(np.eye(4))
+# High above the table, so only the fake joints can collide.
+HOOP_POSE = Pose(
+    np.array(
+        [
+            [1.0, 0.0, 0.0, 0.4],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.5],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+)
 FLANGE_POSE = np.array(
     [
         [0.0, 0.0, 1.0, 0.4],
@@ -34,11 +45,26 @@ FLANGE_POSE = np.array(
 
 
 class FakeRobot:
-    def __init__(self, ik_options=(), is_moving=False):
+    """Robot whose joints are high above the table.
+
+    Args:
+        ik_options: What get_ik_options returns.
+        is_moving: What is_in_motion returns.
+        low_configs: Joint configurations whose joints touch the table.
+    """
+
+    def __init__(self, ik_options=(), is_moving=False, low_configs=()):
         self.is_moving = is_moving
         self.commands = []
         self.ik_flange_poses = []
         self._ik_options = list(ik_options)
+        self._low_configs = list(low_configs)
+
+    def get_link_points(self, joint_config):
+        is_low = any(
+            np.allclose(joint_config, low) for low in self._low_configs
+        )
+        return Points3D(np.full((6, 3), 0.0 if is_low else 0.5))
 
     @property
     def joint_speeds(self):
@@ -111,6 +137,29 @@ def test_move_to_ik_skips_a_nearer_option_beyond_joint_limits():
 
     assert len(robot.commands) == 1
     np.testing.assert_allclose(robot.commands[0], within_limits)
+
+
+def test_move_to_ik_skips_a_nearer_option_that_goes_below_the_table():
+    hits_the_table = np.array(START_JOINT_ANGLES) + 0.05
+    stays_above = np.full(6, -0.9)
+    robot = FakeRobot(
+        [hits_the_table, stays_above], low_configs=[hits_the_table]
+    )
+
+    Planning(robot).move_to_ik(HOOP_POSE)
+
+    np.testing.assert_allclose(robot.commands[0], stays_above)
+
+
+def test_move_to_ik_with_the_hoop_below_the_table_raises():
+    hoop_pose_on_the_table = Pose(HOOP_POSE.copy())
+    hoop_pose_on_the_table[2, 3] = 0.0
+    robot = FakeRobot([np.zeros(6)])
+
+    with pytest.raises(NoJointConfigError):
+        Planning(robot).move_to_ik(hoop_pose_on_the_table)
+
+    assert robot.commands == []
 
 
 @pytest.mark.parametrize(

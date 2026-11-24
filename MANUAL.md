@@ -72,6 +72,12 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 
 Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs`, times `MOVE_TIME_FACTOR` for speeding up and slowing down, plus `MOVE_OVERHEAD`. The next step is sent when the robot stands still. The log has the expected and the real time of every step.
 
+## Table check
+
+No move is sent that would bring the robot or the hoop below 7 cm above the robot base frame origin (`MIN_HEIGHT` in `hoop_guide/collision.py`). The arm joints are checked with a radius of 4 cm, the flange with 3 cm and the hoop at the lowest point of its ring. The radii are estimates. A pose that only goes below is treated as out of reach, in every mode including the manual move.
+
+For the calibration this means the hoop center must stay at least about 10 cm high with the flange pointing down, the flange is then beside the hoop at the same height.
+
 ## Manual move
 
 The table shows the target and the current position of the hoop center in the robot frame, how far the hoop was turned, the target and the current direction of the hoop axes, the number of recorded points and what happened last.

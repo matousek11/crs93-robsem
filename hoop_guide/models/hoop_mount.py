@@ -18,6 +18,12 @@ FLANGE_TO_GRIP = 0.0
 HOOP_THICKNESS = 0.0066
 """Size of the hoop along its axis, which is the flange z axis [m]."""
 
+HOOP_INNER_RADIUS = 0.030
+"""Radius of the hole of the hoop, the inner diameter is 60 mm [m]."""
+
+HOOP_RING_WIDTH = 0.0037
+"""Width of the ring of the hoop, from its hole to its outer edge [m]."""
+
 # Assumes the hoop center lies on the flange z axis and the hoop frame is not
 # rotated against the flange frame. TODO: verify both in the lab.
 FLANGE_TO_HOOP = Pose(
