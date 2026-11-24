@@ -346,6 +346,30 @@ def test_stop_while_following_the_bottom_goes_back_out_and_home():
     assert run.robot.home_count == 1
 
 
+def test_going_back_out_starts_one_point_above_the_reached_one():
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER), (STOP_ON_ROD_TIME, Key.STOP)]
+    )
+
+    heights = run.motion.heights()
+    lowest = heights.index(min(heights))
+    assert heights[lowest + 1] == pytest.approx(heights[lowest - 1])
+    assert heights[lowest + 1] > heights[lowest]
+
+
+def test_unreachable_first_point_on_the_rod_goes_home_from_the_sync_point():
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER)],
+        is_reachable=lambda pose, time: pose[2, 3] > SYNC_HEIGHT - 0.01,
+    )
+
+    assert "out of reach" in run.reporter.warnings[0]
+    assert run.motion.heights() == pytest.approx(
+        [SYNC_HEIGHT] * len(run.motion.moves)
+    )
+    assert run.robot.home_count == 1
+
+
 def test_stop_while_going_back_out_is_ignored():
     run = run_puzzle(
         timed_keys=[
