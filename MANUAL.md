@@ -51,7 +51,7 @@ Every run creates a folder `runs/<date_time>/` with `app.log`. Everything the ap
 
 | Option | What it does | Why |
 |---|---|---|
-| A1, A2, B | Runs the puzzle mode, see below. Only with the real robot. C and D are not offered yet. | One mode per puzzle variant, from the easiest to the hardest. |
+| A1, A2, B, C | Runs the puzzle mode, see below. Only with the real robot. D is not offered yet, its rod has no model. | One mode per puzzle variant, from the easiest to the hardest. |
 | Soft home | Moves the robot to the home position. | Return to a known position, e.g. after stopping a mode. |
 | Release | Engages the brakes and disconnects feedback. Wait until the robot stops and do not use it above the work surface, the arm can slightly drop. | Required before entering the safety cage. |
 | Reset motors | Resets motors in an error state. | Recovery after a motor error (flashing green and red LED). |

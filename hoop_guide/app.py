@@ -20,7 +20,7 @@ from hoop_guide.ui import UserInterface
 
 logger = logging.getLogger(__name__)
 
-MENU_PUZZLES = (Puzzle.A1, Puzzle.A2, Puzzle.B)
+MENU_PUZZLES = (Puzzle.A1, Puzzle.A2, Puzzle.B, Puzzle.C)
 """Puzzles offered in the menu, the others are not ready yet."""
 QUIT_KEY = "0"
 NO_MODE = "None"
