@@ -24,7 +24,7 @@ PLATE_HEIGHT: float | None = 0.07
 """Height of the plate top surface above the robot base frame origin, the
 surface the robot stands on [m]."""
 
-MOVE_LEAD_TIME = 0.4
+MOVE_LEAD_TIME = 0.35
 """Time from sending one path step to the robot arriving there [s].
 
 The poses are predicted for this time ahead. Estimated from the default
@@ -292,11 +292,12 @@ class PuzzleMode:
     def _go_back_out(self, planner: RodPlanner, reached_index: int) -> bool:
         """Goes up the rod to the synchronization point, False when it fails.
 
-        The c key is ignored, the hoop must leave the rod.
+        Starts one point above reached_index, the hoop is already there. The c
+        key is ignored, the hoop must leave the rod.
         """
         self._reporter.info("Going back out of the rod.")
         try:
-            for index in range(reached_index, _SYNC_INDEX - 1, -1):
+            for index in range(reached_index - 1, _SYNC_INDEX - 1, -1):
                 self._step(planner, index)
         except (NoJointConfigError, ValueError) as error:
             self._warn(
