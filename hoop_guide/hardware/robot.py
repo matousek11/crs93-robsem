@@ -7,9 +7,13 @@ from ctu_crs.crs_robot import CRSRobot
 
 from hoop_guide.types import Image
 from hoop_guide.types import JointConfig
+from hoop_guide.types import JointSpeeds
 from hoop_guide.types import Pose
 
 ROBOT_CLASSES: dict[str, type[CRSRobot]] = {"crs93": CRS93, "crs97": CRS97}
+
+_IRC_PER_IRC256 = 1 / 256
+_MILLISECONDS_PER_SECOND = 1000.0
 
 
 class VirtualRobotError(RuntimeError):
@@ -46,6 +50,23 @@ class Robot:
     def is_real(self) -> bool:
         """True for the real robot, False for the virtual one."""
         return self._is_real
+
+    @property
+    def joint_speeds(self) -> JointSpeeds:
+        """Speeds of the joints in a move, the defaults initialize() sets.
+
+        ctu_crs keeps them only in private attributes, in IRC * 256 per
+        millisecond of the motor, and the IRC per degree of each joint.
+        """
+        motor_irc_per_second = (
+            self._crs._default_speed_irc256_per_ms
+            * _IRC_PER_IRC256
+            * _MILLISECONDS_PER_SECOND
+        )
+        degrees_per_second = motor_irc_per_second / np.abs(
+            self._crs._deg_to_irc
+        )
+        return JointSpeeds(np.deg2rad(degrees_per_second))
 
     def initialize(self, should_home: bool) -> None:
         """Initializes the controller, optionally with hard and soft home."""

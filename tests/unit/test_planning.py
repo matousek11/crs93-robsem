@@ -16,6 +16,7 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import PlatePose
 from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
+from hoop_guide.types import JointSpeeds
 from hoop_guide.types import Pose
 
 JOINT_LIMIT = 1.0  # [rad]
@@ -37,6 +38,10 @@ class FakeRobot:
         self.commands = []
         self.ik_flange_poses = []
         self._ik_options = list(ik_options)
+
+    @property
+    def joint_speeds(self):
+        return JointSpeeds(np.ones(6))
 
     def get_joint_angles(self):
         return np.array(START_JOINT_ANGLES)

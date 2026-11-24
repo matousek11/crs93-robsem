@@ -2,6 +2,9 @@ import numpy as np
 import pytest
 
 from hoop_guide.control import MotionController
+from hoop_guide.control import get_move_time
+from hoop_guide.types import JointConfig
+from hoop_guide.types import JointSpeeds
 
 JOINT_LIMIT = 1.0  # [rad]
 START_JOINT_ANGLES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
@@ -11,6 +14,10 @@ class FakeRobot:
     def __init__(self):
         self.joint_angles = np.array(START_JOINT_ANGLES)
         self.commands = []
+
+    @property
+    def joint_speeds(self):
+        return JointSpeeds(np.ones(6))
 
     def get_joint_angles(self):
         return self.joint_angles
@@ -71,3 +78,43 @@ def test_move_joint_out_of_limits_raises_and_sends_nothing():
         MotionController(robot).move_joint(0, 2 * JOINT_LIMIT)
 
     assert robot.commands == []
+
+
+# get_move_time
+
+JOINT_SPEEDS = JointSpeeds(np.array([0.5, 0.1, 0.3, 1.0, 1.0, 2.0]))  # [rad/s]
+START = JointConfig(np.array(START_JOINT_ANGLES))
+
+
+@pytest.mark.parametrize(
+    ("change", "expected_time"),
+    [
+        ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0.0),
+        ([0.0, 0.0, 0.0, 0.0, 0.0, 0.4], 0.2),
+        ([0.0, -0.05, 0.0, 0.0, 0.0, 0.0], 0.5),
+        ([0.2, 0.05, 0.3, 0.5, 0.5, 0.4], 1.0),
+    ],
+    ids=["no_change", "one_joint", "backwards", "slowest_joint_wins"],
+)
+def test_move_time_is_set_by_the_slowest_joint_for_its_change(
+    change, expected_time
+):
+    target = JointConfig(START + np.array(change))
+
+    move_time = get_move_time(START, target, JOINT_SPEEDS)
+
+    assert move_time == pytest.approx(expected_time)
+
+
+def test_move_time_with_different_shapes_raises():
+    with pytest.raises(ValueError, match="same shape"):
+        get_move_time(START, JointConfig(START[:5]), JOINT_SPEEDS)
+
+
+@pytest.mark.parametrize("speed", [0.0, -1.0], ids=["zero", "negative"])
+def test_move_time_with_a_speed_that_is_not_positive_raises(speed):
+    joint_speeds = JointSpeeds(JOINT_SPEEDS.copy())
+    joint_speeds[2] = speed
+
+    with pytest.raises(ValueError, match="positive"):
+        get_move_time(START, START, joint_speeds)
