@@ -31,10 +31,9 @@ BOTTOM_WAIT = 1.0
 SEARCH_WINDOW = 20.0
 """How far after now a start is searched for [s]."""
 
-EARLIEST_START = 2.0
-"""How soon after now a start may be. The search itself takes up to about
-1 s on the robot, a start in that time would be gone before it is found
-[s]."""
+EARLIEST_START = 3.0
+"""How soon after now a start may be. The search took 2.4 s on the robot on
+2026-11-24, a start in that time would be gone before it is found [s]."""
 
 SEARCH_STEP = 0.5
 """Time between two tried starts [s]."""
@@ -43,9 +42,9 @@ TIME_MARGIN = 0.2
 """Every path point must be reachable this long before and after the time
 the simulation reaches it [s]."""
 
-# From the log of 2026-11-24: the steps took about 0.05 s longer than they
-# were aimed. TODO: refine with a log of a whole run down the rod.
-READY_FLAG_DELAY = 0.05
+# From the third test of 2026-11-24, 55 steps: real time = move time +
+# 0.24 s, MOVE_OVERHEAD already covers it.
+READY_FLAG_DELAY = 0.0
 """Time from the robot arriving to the controller reporting it ready [s]."""
 
 JOINT_MARGIN_TOLERANCE = math.radians(2.0)
@@ -82,8 +81,28 @@ class Kinematics(Protocol):
         """
 
 
-class _JointFlipError(Exception):
-    """A step changes a joint by more than MAX_JOINT_STEP."""
+class JointFlipError(RuntimeError):
+    """Raised when a step changes a joint by more than MAX_JOINT_STEP."""
+
+
+def check_joint_step(start: JointConfig, target: JointConfig) -> None:
+    """Checks that no joint changes by more than MAX_JOINT_STEP.
+
+    Args:
+        start: Joint angles before the step [rad].
+        target: Joint angles after the step [rad].
+
+    Raises:
+        JointFlipError: A joint changes by more, the message names it.
+    """
+    changes = np.abs(target - start)
+    joint_index = int(np.argmax(changes))
+    if float(changes[joint_index]) > MAX_JOINT_STEP:
+        raise JointFlipError(
+            f"Joint {joint_index + 1} would turn by"
+            f" {math.degrees(float(changes[joint_index])):.0f} deg in one"
+            " step."
+        )
 
 
 def find_start_time(
@@ -128,7 +147,7 @@ def find_start_time(
             waiting_angles = _choose_checked(
                 planner, kinematics, _SYNC_INDEX, start_time, waiting_angles
             )
-        except (NoJointConfigError, ValueError, _JointFlipError):
+        except (NoJointConfigError, ValueError, JointFlipError):
             break
         if start_time < now + EARLIEST_START:
             continue
@@ -179,7 +198,7 @@ def _simulate_run(
                 planner, kinematics, index, time, angles
             )
             margin = min(margin, step_margin)
-    except (NoJointConfigError, ValueError, _JointFlipError):
+    except (NoJointConfigError, ValueError, JointFlipError):
         return None
     return margin
 
@@ -201,7 +220,7 @@ def _simulate_step(
     Raises:
         NoJointConfigError: The point is not reachable around the arrival.
         ValueError: The planner cannot give a pose for the point.
-        _JointFlipError: The step flips the joint configuration.
+        JointFlipError: The step flips the joint configuration.
     """
     estimate = planner.get_hoop_pose(sent_time + MOVE_OVERHEAD, index)
     move_time = get_move_time(
@@ -248,11 +267,10 @@ def _choose_checked(
     Raises:
         NoJointConfigError: The point is not reachable then.
         ValueError: The planner cannot give a pose for the point.
-        _JointFlipError: The configuration flips from joint_angles.
+        JointFlipError: The configuration flips from joint_angles.
     """
     angles = kinematics.choose_joint_config(
         planner.get_hoop_pose(time, index), joint_angles
     )
-    if float(np.max(np.abs(angles - joint_angles))) > MAX_JOINT_STEP:
-        raise _JointFlipError
+    check_joint_step(joint_angles, angles)
     return angles

@@ -6,6 +6,8 @@ from types import TracebackType
 from typing import Protocol
 from typing import Self
 
+import numpy as np
+
 from hoop_guide.control import MOVE_OVERHEAD
 from hoop_guide.control import get_lead_time
 from hoop_guide.estimation import TableMotion
@@ -17,7 +19,9 @@ from hoop_guide.plate_tracker import PlateTracker
 from hoop_guide.rods import Puzzle
 from hoop_guide.run_schedule import BOTTOM_WAIT
 from hoop_guide.run_schedule import SEARCH_WINDOW
+from hoop_guide.run_schedule import JointFlipError
 from hoop_guide.run_schedule import Kinematics
+from hoop_guide.run_schedule import check_joint_step
 from hoop_guide.run_schedule import find_start_time
 from hoop_guide.types import Homography
 from hoop_guide.types import JointConfig
@@ -264,7 +268,7 @@ class PuzzleMode:
         """
         self._info("Moving to the synchronization point.")
         try:
-            self._step(planner, _SYNC_INDEX)
+            self._step(planner, _SYNC_INDEX, can_flip=True)
             self._info(
                 "At the synchronization point. Press Enter to go down the rod,"
                 " c to stop."
@@ -279,7 +283,7 @@ class PuzzleMode:
                     start_time = self._find_start_time(planner)
                 self._step(planner, _SYNC_INDEX)
             return True
-        except (NoJointConfigError, ValueError) as error:
+        except (NoJointConfigError, ValueError, JointFlipError) as error:
             self._warn(f"Synchronization point is out of reach: {error}")
             return False
 
@@ -296,7 +300,8 @@ class PuzzleMode:
                 " to search again, c to stop."
             )
         else:
-            self._info(f"Going down the rod in {start_time - now:.1f} s.")
+            remaining_time = start_time - self._clock.now()
+            self._info(f"Going down the rod in {remaining_time:.1f} s.")
         return start_time
 
     def _go_down(self, planner: RodPlanner, last_index: int) -> int:
@@ -316,7 +321,7 @@ class PuzzleMode:
                     self._info("Stopped, going back out.")
                     return reached_index
                 self._step(planner, last_index)
-        except (NoJointConfigError, ValueError) as error:
+        except (NoJointConfigError, ValueError, JointFlipError) as error:
             self._warn(f"Path point is out of reach, going back out: {error}")
         return reached_index
 
@@ -330,7 +335,7 @@ class PuzzleMode:
         try:
             for index in range(reached_index - 1, _SYNC_INDEX - 1, -1):
                 self._step(planner, index)
-        except (NoJointConfigError, ValueError) as error:
+        except (NoJointConfigError, ValueError, JointFlipError) as error:
             self._warn(
                 f"Going back out failed, the hoop may still be on the rod: "
                 f"{error} Use the Emergency Stop button if the rod pushes it."
@@ -339,28 +344,45 @@ class PuzzleMode:
         self._keyboard.discard_pending()
         return True
 
-    def _step(self, planner: RodPlanner, index: int) -> None:
+    def _step(
+        self, planner: RodPlanner, index: int, can_flip: bool = False
+    ) -> None:
         """Moves the hoop to a path point predicted for its arrival.
+
+        Args:
+            planner: Path of the hoop.
+            index: Path point to move to.
+            can_flip: True when a joint may change by more than
+                MAX_JOINT_STEP, for the move from home to the path.
 
         Raises:
             NoJointConfigError: The point cannot be reached.
             ValueError: The planner cannot give a pose for the point.
+            JointFlipError: A joint would change by more than
+                MAX_JOINT_STEP, nothing is sent.
         """
         sent_time = self._clock.now()
         # The arrival time depends on the target, one estimate is enough
         # because the table hardly moves in the difference.
         estimate = planner.get_hoop_pose(sent_time + MOVE_OVERHEAD, index)
         lead_time = get_lead_time(self._motion.get_move_time(estimate))
-        self._motion.move_to_ik(
-            planner.get_hoop_pose(sent_time + lead_time, index)
+        hoop_pose = planner.get_hoop_pose(sent_time + lead_time, index)
+        joint_angles = self._motion.get_joint_angles()
+        target_angles = self._motion.choose_joint_config(
+            hoop_pose, joint_angles
         )
+        if not can_flip:
+            check_joint_step(joint_angles, target_angles)
+        self._motion.move_to_ik(hoop_pose)
         while self._motion.is_in_motion():
             self._clock.sleep(MOTION_POLL_PERIOD)
         logger.info(
-            "Step to path point %d: expected %.3f s, took %.3f s.",
+            "Step to path point %d: expected %.3f s, took %.3f s, joints %s"
+            " deg.",
             index,
             lead_time,
             self._clock.now() - sent_time,
+            np.round(np.degrees(target_angles), 1).tolist(),
         )
 
     def _info(self, message: str) -> None:

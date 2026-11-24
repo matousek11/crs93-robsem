@@ -16,6 +16,10 @@ from hoop_guide.types import JointSpeeds
 # In the second test that day, with 0.3 s, the hoop was slightly ahead of the
 # rod, about the same all the time: the ready flag of the controller comes
 # later than the robot stops. Lowered to 0.25 s, tune further.
+# Third test that day, puzzle B, 55 steps of all sizes: real time = 1.00 *
+# move time + 0.24 s. With the factor 1.3 the start search simulated the
+# run 8.3 s slower than it went, so it checked the plate 105 deg away from
+# where it was, and the wrist flipped near the end of the run.
 MOVE_OVERHEAD = 0.25
 """Time every step takes on top of its move, however small [s].
 
@@ -23,7 +27,7 @@ Communication with the controller, waiting for its ready flag and
 settling.
 """
 
-MOVE_TIME_FACTOR = 1.3
+MOVE_TIME_FACTOR = 1.0
 """How many times longer a move takes than at full joint speeds.
 
 The joints speed up and slow down, see MOVE_OVERHEAD for the measurement.
