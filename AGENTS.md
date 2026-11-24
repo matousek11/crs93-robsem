@@ -32,6 +32,7 @@ hoop_guide/              # main package
 ├── estimation.py        # center of rotation, ω, phase, pose prediction
 ├── planning.py          # hoop path along the rod, handle orientation
 ├── control.py           # tracking loop, step timing
+├── run_schedule.py      # start time of a run, found by simulating the whole run
 ├── camera_stream.py     # background thread: grab, timestamp, process, keep the latest Frame
 ├── models/              # physical parts the robot works with
 │   └── hoop_mount.py    # transform between the flange and the hoop center

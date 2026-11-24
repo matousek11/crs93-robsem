@@ -16,6 +16,7 @@ from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
 from hoop_guide.rods import rod_centerline
 from hoop_guide.types import JointConfig
+from hoop_guide.types import JointSpeeds
 from hoop_guide.types import PlateDirections3D
 from hoop_guide.types import PlatePoints3D
 from hoop_guide.types import Pose
@@ -64,7 +65,9 @@ class Planning:
             NoJointConfigError: The pose is out of reach or only beyond the
                 joint limits. Nothing is sent to the robot.
         """
-        picked_config = self._choose_joint_config(hoop_pose)
+        picked_config = self.choose_joint_config(
+            hoop_pose, self.robot.get_joint_angles()
+        )
 
         # 5. move robot to new configurations
         self.robot.set_joint_angles(picked_config)
@@ -85,14 +88,38 @@ class Planning:
             NoJointConfigError: The pose is out of reach or only beyond the
                 joint limits.
         """
+        joint_angles = self.robot.get_joint_angles()
         return control.get_move_time(
-            self.robot.get_joint_angles(),
-            self._choose_joint_config(hoop_pose),
+            joint_angles,
+            self.choose_joint_config(hoop_pose, joint_angles),
             self.robot.joint_speeds,
         )
 
-    def _choose_joint_config(self, hoop_pose: Pose) -> JointConfig:
-        """Returns the reaching configuration nearest to the joint angles now.
+    @property
+    def joint_speeds(self) -> JointSpeeds:
+        """Speeds of the joints in a move [rad/s]."""
+        return self.robot.joint_speeds
+
+    @property
+    def joint_limits(self) -> tuple[JointConfig, JointConfig]:
+        """Lowest and highest angle of every joint [rad]."""
+        return self.robot.joint_limits
+
+    def get_joint_angles(self) -> JointConfig:
+        """Returns the joint angles measured by the controller."""
+        return self.robot.get_joint_angles()
+
+    def choose_joint_config(
+        self, hoop_pose: Pose, joint_angles: JointConfig
+    ) -> JointConfig:
+        """Returns the reaching configuration nearest to the joint angles.
+
+        Of the joint configurations within the joint limits, the one with
+        the smallest mean absolute change from joint_angles.
+
+        Args:
+            hoop_pose: Target pose of the hoop in the robot frame.
+            joint_angles: Joint angles the move starts from [rad].
 
         Raises:
             NoJointConfigError: The pose is out of reach or only beyond the
@@ -117,7 +144,7 @@ class Planning:
             )
 
         # 4. find the configuration with the smallest average change per joint
-        curr_config = self.robot.get_joint_angles()
+        curr_config = joint_angles
         avg_change = []
         for possible_config in possible_configs:
             new_conf_change_sum = 0.0
@@ -178,6 +205,11 @@ class RodPlanner:
         self._points = PlatePoints3D(np.vstack([sync_point, points]))
         self._tangents = PlateDirections3D(np.vstack([tangents[0], tangents]))
 
+    @property
+    def point_count(self) -> int:
+        """Number of path points, the synchronization point included."""
+        return len(self._points)
+
     def update(self, target_time: float, start_index: int) -> tuple[Pose, ...]:
         """Returns the hoop poses from a path point on, for a moment.
 
@@ -195,17 +227,39 @@ class RodPlanner:
                 axis in a point is level and points at the robot z axis, so
                 the handle cannot point toward the robot base.
         """
-        if not 0 <= start_index < len(self._points):
+        return self._get_hoop_poses(target_time, start_index, self.point_count)
+
+    def get_hoop_pose(self, target_time: float, index: int) -> Pose:
+        """Returns the hoop pose of one path point, for a moment.
+
+        The same as update(target_time, index)[0], without computing the
+        rest of the path.
+
+        Raises:
+            ValueError: As update.
+        """
+        return self._get_hoop_poses(target_time, index, index + 1)[0]
+
+    def _get_hoop_poses(
+        self, target_time: float, start_index: int, stop_index: int
+    ) -> tuple[Pose, ...]:
+        """Returns the hoop poses of the points start_index to stop_index - 1.
+
+        See update.
+        """
+        if not 0 <= start_index < self.point_count:
             raise ValueError(
-                f"Start index must be between 0 and {len(self._points) - 1},"
+                f"Start index must be between 0 and {self.point_count - 1},"
                 f" got {start_index}."
             )
         plate = self._table_motion.predict(target_time)
         points = plate_to_robot_points(
-            PlatePoints3D(self._points[start_index:]), plate, self._plate_height
+            PlatePoints3D(self._points[start_index:stop_index]),
+            plate,
+            self._plate_height,
         )
         tangents = plate_to_robot_directions(
-            PlateDirections3D(self._tangents[start_index:]), plate
+            PlateDirections3D(self._tangents[start_index:stop_index]), plate
         )
         hoop_poses = []
         for offset, (point, tangent) in enumerate(

@@ -6,6 +6,8 @@ from types import TracebackType
 from typing import Protocol
 from typing import Self
 
+from hoop_guide.control import MOVE_OVERHEAD
+from hoop_guide.control import get_lead_time
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import NoJointConfigError
@@ -13,7 +15,12 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.plate_tracker import PLATE_SAMPLE_COUNT
 from hoop_guide.plate_tracker import PlateTracker
 from hoop_guide.rods import Puzzle
+from hoop_guide.run_schedule import BOTTOM_WAIT
+from hoop_guide.run_schedule import SEARCH_WINDOW
+from hoop_guide.run_schedule import Kinematics
+from hoop_guide.run_schedule import find_start_time
 from hoop_guide.types import Homography
+from hoop_guide.types import JointConfig
 from hoop_guide.types import Pose
 from hoop_guide.vision import Frame
 
@@ -24,34 +31,8 @@ PLATE_HEIGHT: float | None = 0.07
 """Height of the plate top surface above the robot base frame origin, the
 surface the robot stands on [m]."""
 
-# Measured in the lab on 2026-11-24, puzzle A2, from the expected and the
-# real step times in app.log. With an overhead of 0.03 s and no factor the
-# hoop lagged visibly behind the rod center at the synchronization point.
-# The smallest steps, 0.01 s at full joint speeds, took 0.29 to 0.30 s.
-# The move from home to the synchronization point, 3.94 s at full joint
-# speeds, took 5.32 s: 1.27 times longer after the overhead. Steps of 2 cm
-# down the rod were not in that log, refine both when they are.
-# In the second test that day, with 0.3 s, the hoop was slightly ahead of the
-# rod, about the same all the time: the ready flag of the controller comes
-# later than the robot stops. Lowered to 0.25 s, tune further.
-MOVE_OVERHEAD = 0.25
-"""Time every step takes on top of its move, however small [s].
-
-Communication with the controller, waiting for its ready flag and
-settling.
-"""
-
-MOVE_TIME_FACTOR = 1.3
-"""How many times longer a move takes than at full joint speeds.
-
-The joints speed up and slow down, see MOVE_OVERHEAD for the measurement.
-"""
-
 MEASUREMENT_TIMEOUT = 15.0
 """Longest wait for the frames the table motion is measured from [s]."""
-
-BOTTOM_WAIT = 1.0
-"""How long the hoop follows the last path point before going back [s]."""
 
 FRAME_POLL_PERIOD = 0.02
 """Time between two looks for a new camera frame [s]."""
@@ -62,8 +43,11 @@ MOTION_POLL_PERIOD = 0.02
 _SYNC_INDEX = 0
 
 
-class PuzzleMotion(Protocol):
+class PuzzleMotion(Kinematics, Protocol):
     """Moving the hoop."""
+
+    def get_joint_angles(self) -> JointConfig:
+        """Returns the joint angles measured by the controller."""
 
     def move_to_ik(self, hoop_pose: Pose) -> None:
         """Starts a move that puts the hoop into the pose.
@@ -157,12 +141,14 @@ class PuzzleMode:
 
     A run measures the table motion from the first PLATE_SAMPLE_COUNT frames
     with the plate, moves the hoop to the synchronization point above the
-    rod and follows the rotation there until the operator presses Enter.
-    Then it goes down the rod point by point, follows the last point for
-    BOTTOM_WAIT, goes back out to the synchronization point and returns
-    home. Every step is aimed where the rod is when the robot arrives, the
-    time of the move at full joint speeds times MOVE_TIME_FACTOR plus
-    MOVE_OVERHEAD, and waits until the robot stands still.
+    rod and follows the rotation there. Enter searches for a start whose
+    whole run goes through, see find_start_time, the hoop keeps following
+    the point until then. Then it goes down the rod point by point, follows
+    the last point for BOTTOM_WAIT, goes back out to the synchronization
+    point and returns home. Every step is aimed where the rod is when the
+    robot arrives, the time of the move at full joint speeds times
+    MOVE_TIME_FACTOR plus MOVE_OVERHEAD, and waits until the robot stands
+    still.
 
     The c key stops the run where it is before the hoop goes down. On the
     rod it and an unreachable point both turn the hoop back out of the rod,
@@ -223,7 +209,7 @@ class PuzzleMode:
             planner = RodPlanner(puzzle, table_motion, plate_height)
             if not self._synchronize(planner):
                 return
-            last_index = len(planner.update(self._clock.now(), _SYNC_INDEX)) - 1
+            last_index = planner.point_count - 1
             reached_index = self._go_down(planner, last_index)
             if not self._go_back_out(planner, reached_index):
                 return
@@ -271,7 +257,11 @@ class PuzzleMode:
         return tracker.motion
 
     def _synchronize(self, planner: RodPlanner) -> bool:
-        """Follows the synchronization point until Enter, False when stopped."""
+        """Follows the synchronization point until the start, False if stopped.
+
+        Enter searches for a start whose whole run goes through, see
+        find_start_time. The hoop keeps following the point until then.
+        """
         self._info("Moving to the synchronization point.")
         try:
             self._step(planner, _SYNC_INDEX)
@@ -279,17 +269,35 @@ class PuzzleMode:
                 "At the synchronization point. Press Enter to go down the rod,"
                 " c to stop."
             )
-            while True:
+            start_time: float | None = None
+            while start_time is None or self._clock.now() < start_time:
                 key = self._keyboard.poll_key()
-                if key is Key.ENTER:
-                    return True
                 if key is Key.STOP:
                     self._info("Stopped.")
                     return False
+                if key is Key.ENTER and start_time is None:
+                    start_time = self._find_start_time(planner)
                 self._step(planner, _SYNC_INDEX)
+            return True
         except (NoJointConfigError, ValueError) as error:
             self._warn(f"Synchronization point is out of reach: {error}")
             return False
+
+    def _find_start_time(self, planner: RodPlanner) -> float | None:
+        """Searches for a safe start and reports it, None when there is none."""
+        now = self._clock.now()
+        start_time = find_start_time(
+            planner, self._motion, self._motion.get_joint_angles(), now
+        )
+        if start_time is None:
+            self._warn(
+                f"No run down the rod goes through within {SEARCH_WINDOW:.0f}"
+                " s, the hoop stays at the synchronization point. Press Enter"
+                " to search again, c to stop."
+            )
+        else:
+            self._info(f"Going down the rod in {start_time - now:.1f} s.")
+        return start_time
 
     def _go_down(self, planner: RodPlanner, last_index: int) -> int:
         """Goes down the rod, returns the last path point reached."""
@@ -341,12 +349,11 @@ class PuzzleMode:
         sent_time = self._clock.now()
         # The arrival time depends on the target, one estimate is enough
         # because the table hardly moves in the difference.
-        estimate = planner.update(sent_time + MOVE_OVERHEAD, index)[0]
-        lead_time = (
-            MOVE_TIME_FACTOR * self._motion.get_move_time(estimate)
-            + MOVE_OVERHEAD
+        estimate = planner.get_hoop_pose(sent_time + MOVE_OVERHEAD, index)
+        lead_time = get_lead_time(self._motion.get_move_time(estimate))
+        self._motion.move_to_ik(
+            planner.get_hoop_pose(sent_time + lead_time, index)
         )
-        self._motion.move_to_ik(planner.update(sent_time + lead_time, index)[0])
         while self._motion.is_in_motion():
             self._clock.sleep(MOTION_POLL_PERIOD)
         logger.info(

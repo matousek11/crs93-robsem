@@ -3,6 +3,8 @@ import math
 import numpy as np
 import pytest
 
+from hoop_guide.control import MOVE_OVERHEAD
+from hoop_guide.control import MOVE_TIME_FACTOR
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import SYNC_DISTANCE
@@ -11,17 +13,18 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import MARKER_CENTERS
 from hoop_guide.plate import MARKER_SIZE
 from hoop_guide.plate import PlatePose
-from hoop_guide.puzzle_mode import BOTTOM_WAIT
 from hoop_guide.puzzle_mode import MEASUREMENT_TIMEOUT
 from hoop_guide.puzzle_mode import MOTION_POLL_PERIOD
-from hoop_guide.puzzle_mode import MOVE_OVERHEAD
-from hoop_guide.puzzle_mode import MOVE_TIME_FACTOR
 from hoop_guide.puzzle_mode import PuzzleMode
 from hoop_guide.puzzle_mode import SystemClock
 from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
+from hoop_guide.run_schedule import BOTTOM_WAIT
+from hoop_guide.run_schedule import EARLIEST_START
 from hoop_guide.types import Homography
 from hoop_guide.types import Image
+from hoop_guide.types import JointConfig
+from hoop_guide.types import JointSpeeds
 from hoop_guide.types import PixelPoints
 from hoop_guide.vision import Frame
 from hoop_guide.vision import MarkerDetection
@@ -35,12 +38,17 @@ FRAME_PERIOD = 0.1  # [s]
 ROTATION_CENTER = (0.40, 0.03)  # [m]
 ROTATION_RADIUS = 0.06  # [m]
 ANGULAR_VELOCITY = 0.2  # [rad/s]
-MOVING_CHECKS = 10  # each step takes 10 * MOTION_POLL_PERIOD
+# Each step takes 15 * MOTION_POLL_PERIOD = 0.3 s, about as long as a step of
+# the start search with the fast fake joints: MOVE_OVERHEAD plus the ready
+# flag delay.
+MOVING_CHECKS = 15
 SYNC_HEIGHT = PLATE_HEIGHT + 0.2 + SYNC_DISTANCE
 BOTTOM_HEIGHT = PLATE_HEIGHT + STOP_HEIGHT
 FAKE_MOVE_TIME = 0.25  # what the fake robot reports for every move [s]
 ENTER_TIME = 8.0  # after the measurement of about 5 s [s]
-STOP_ON_ROD_TIME = 8.5  # a few steps down the rod [s]
+# A few steps down the rod, after the start EARLIEST_START after Enter [s].
+STOP_ON_ROD_TIME = ENTER_TIME + EARLIEST_START + 1.5
+LOW_HEIGHT = PLATE_HEIGHT + 0.1  # rules make points below this unreachable
 
 
 def plate_pose_at(time):
@@ -107,16 +115,43 @@ class FakeFrames:
 class FakeMotion:
     """Robot whose every move takes MOVING_CHECKS questions.
 
+    Its joint configuration is the hoop position, so the joints are fast.
+
     Args:
         clock: Fake clock, its time is recorded with every move.
         is_reachable: Rule on the hoop pose and the time of the move.
+        is_reachable_in_search: Rule the start search sees, is_reachable
+            when None.
     """
 
-    def __init__(self, clock, is_reachable=lambda pose, time: True):
+    def __init__(
+        self,
+        clock,
+        is_reachable=lambda pose, time: True,
+        is_reachable_in_search=None,
+    ):
         self._clock = clock
         self._is_reachable = is_reachable
+        self._is_reachable_in_search = is_reachable_in_search or is_reachable
         self._remaining_checks = 0
+        self._joint_angles = JointConfig(np.zeros(6))
         self.moves = []
+
+    @property
+    def joint_speeds(self):
+        return JointSpeeds(np.full(6, 1000.0))
+
+    @property
+    def joint_limits(self):
+        return JointConfig(np.full(6, -10.0)), JointConfig(np.full(6, 10.0))
+
+    def get_joint_angles(self):
+        return self._joint_angles
+
+    def choose_joint_config(self, hoop_pose, joint_angles):
+        if not self._is_reachable_in_search(hoop_pose, self._clock.time):
+            raise NoJointConfigError("No joint configuration.")
+        return JointConfig(np.r_[hoop_pose[:3, 3], 0.0, 0.0, 0.0])
 
     def get_move_time(self, hoop_pose):
         if not self._is_reachable(hoop_pose, self._clock.time):
@@ -127,6 +162,7 @@ class FakeMotion:
         if not self._is_reachable(hoop_pose, self._clock.time):
             raise NoJointConfigError("No joint configuration.")
         self.moves.append((self._clock.time, hoop_pose.copy()))
+        self._joint_angles = JointConfig(np.r_[hoop_pose[:3, 3], 0.0, 0.0, 0.0])
         self._remaining_checks = MOVING_CHECKS
 
     def is_in_motion(self):
@@ -198,13 +234,16 @@ class Run:
         timed_keys=(),
         motion_class=None,
         is_reachable=lambda pose, time: True,
+        is_reachable_in_search=None,
         has_camera=True,
         is_plate_visible=True,
         homography=IDENTITY,
         plate_height=PLATE_HEIGHT,
     ):
         self.clock = FakeClock()
-        self.motion = (motion_class or FakeMotion)(self.clock, is_reachable)
+        self.motion = (motion_class or FakeMotion)(
+            self.clock, is_reachable, is_reachable_in_search
+        )
         self.robot = FakeRobot()
         self.keyboard = FakeKeyboard(self.clock, timed_keys)
         self.reporter = FakeReporter()
@@ -294,9 +333,14 @@ def test_moves_aim_at_the_plate_predicted_for_the_arrival():
 def test_hoop_goes_down_then_follows_the_bottom_then_goes_back_up():
     run = complete_run()
 
-    after_enter = [
-        pose[2, 3] for time, pose in run.motion.moves if time >= ENTER_TIME
-    ]
+    heights = run.motion.heights()
+    # From the last move at the sync point on.
+    first_down = next(
+        index
+        for index, height in enumerate(heights)
+        if height < SYNC_HEIGHT - 1e-9
+    )
+    after_enter = heights[first_down - 1 :]
     lowest = after_enter.index(min(after_enter))
     assert np.all(np.diff(after_enter[: lowest + 1]) < 0)
     at_bottom = [
@@ -352,13 +396,16 @@ def test_stop_on_the_rod_goes_back_out_and_home():
 
 
 def test_stop_while_following_the_bottom_goes_back_out_and_home():
-    # Enter is noticed within one step after ENTER_TIME, then every point down
-    # the rod takes one step. Stop in the middle of BOTTOM_WAIT.
+    # Enter is noticed within one step after ENTER_TIME, one more step follows
+    # the sync point, then every point down the rod takes one step. Stop
+    # early in BOTTOM_WAIT.
     still_table = TableMotion(0.5, 0.0, 0.0, 0.0, PlatePose(0.5, 0.0, 0.0))
     path = RodPlanner(Puzzle.A1, still_table, PLATE_HEIGHT).update(0.0, 0)
     step_time = MOVING_CHECKS * MOTION_POLL_PERIOD
-    bottom_reached_time = ENTER_TIME + step_time + (len(path) - 1) * step_time
-    stop_at_bottom_time = bottom_reached_time + BOTTOM_WAIT / 2
+    latest_bottom_time = (
+        ENTER_TIME + EARLIEST_START + (len(path) + 1) * step_time
+    )
+    stop_at_bottom_time = latest_bottom_time + 0.2
     run = run_puzzle(
         timed_keys=[(ENTER_TIME, Key.ENTER), (stop_at_bottom_time, Key.STOP)]
     )
@@ -384,6 +431,7 @@ def test_unreachable_first_point_on_the_rod_goes_home_from_the_sync_point():
     run = run_puzzle(
         timed_keys=[(ENTER_TIME, Key.ENTER)],
         is_reachable=lambda pose, time: pose[2, 3] > SYNC_HEIGHT - 0.01,
+        is_reachable_in_search=lambda pose, time: True,
     )
 
     assert "out of reach" in run.reporter.warnings[0]
@@ -406,17 +454,65 @@ def test_stop_while_going_back_out_is_ignored():
     assert run.robot.home_count == 1
 
 
-def test_unreachable_point_on_the_rod_goes_back_out_and_home():
-    lowest_reachable = PLATE_HEIGHT + 0.1
+def test_point_out_of_reach_only_in_reality_goes_back_out_and_home():
     run = run_puzzle(
         timed_keys=[(ENTER_TIME, Key.ENTER)],
-        is_reachable=lambda pose, time: pose[2, 3] >= lowest_reachable,
+        is_reachable=lambda pose, time: pose[2, 3] >= LOW_HEIGHT,
+        is_reachable_in_search=lambda pose, time: True,
     )
 
     assert "out of reach" in run.reporter.warnings[0]
     heights = run.motion.heights()
-    assert min(heights) >= lowest_reachable
+    assert min(heights) >= LOW_HEIGHT
     assert heights[-1] == pytest.approx(SYNC_HEIGHT)
+    assert run.robot.home_count == 1
+
+
+def test_without_a_safe_start_the_hoop_stays_at_the_sync_point():
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER), (ENTER_TIME + 3.0, Key.STOP)],
+        is_reachable=lambda pose, time: pose[2, 3] >= LOW_HEIGHT,
+    )
+
+    assert "No run down the rod goes through" in run.reporter.warnings[0]
+    assert min(run.motion.heights()) == pytest.approx(SYNC_HEIGHT)
+    assert run.robot.home_count == 0
+
+
+def test_enter_searches_again_after_no_safe_start():
+    def is_reachable(pose, time):
+        return pose[2, 3] >= LOW_HEIGHT or time > ENTER_TIME + 2.0
+
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER), (ENTER_TIME + 3.0, Key.ENTER)],
+        is_reachable=is_reachable,
+    )
+
+    assert len(run.reporter.warnings) == 1
+    assert min(run.motion.heights()) == pytest.approx(BOTTOM_HEIGHT)
+    assert run.robot.home_count == 1
+
+
+def test_hoop_waits_at_the_sync_point_until_a_safe_start():
+    # Low points are out of reach while the rod is nearer to the robot than
+    # the table axis. At ENTER_TIME the plate is there and turns away.
+    def is_reachable(pose, time):
+        return pose[2, 3] >= LOW_HEIGHT or pose[0, 3] >= ROTATION_CENTER[0]
+
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER)], is_reachable=is_reachable
+    )
+
+    low_moves = [
+        (time, pose)
+        for time, pose in run.motion.moves
+        if pose[2, 3] < LOW_HEIGHT
+    ]
+    assert low_moves
+    assert low_moves[0][0] > ENTER_TIME + 5.0
+    assert all(pose[0, 3] >= ROTATION_CENTER[0] for _, pose in low_moves)
+    assert any("Going down the rod in" in info for info in run.reporter.infos)
+    assert run.reporter.warnings == []
     assert run.robot.home_count == 1
 
 
