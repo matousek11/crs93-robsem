@@ -122,6 +122,23 @@ def test_move_to_ik_unreachable_pose_raises_and_sends_nothing(ik_options):
     assert robot.commands == []
 
 
+def test_move_time_uses_the_option_move_to_ik_sends():
+    far = np.full(6, -0.9)
+    near = np.array(START_JOINT_ANGLES) + [0.0, 0.05, 0.0, 0.0, 0.0, 0.02]
+    robot = FakeRobot([far, near])
+
+    move_time = Planning(robot).get_move_time(HOOP_POSE)
+
+    # Fake joint speeds are 1 rad/s, the largest change is 0.05 rad.
+    assert move_time == pytest.approx(0.05)
+    assert robot.commands == []
+
+
+def test_move_time_of_an_unreachable_pose_raises():
+    with pytest.raises(NoJointConfigError):
+        Planning(FakeRobot()).get_move_time(HOOP_POSE)
+
+
 def test_get_hoop_pose_is_the_measured_flange_pose_moved_to_the_hoop():
     hoop_pose = Planning(FakeRobot()).get_hoop_pose()
 

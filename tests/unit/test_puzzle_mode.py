@@ -12,7 +12,7 @@ from hoop_guide.plate import PlatePose
 from hoop_guide.puzzle_mode import BOTTOM_WAIT
 from hoop_guide.puzzle_mode import MEASUREMENT_TIMEOUT
 from hoop_guide.puzzle_mode import MOTION_POLL_PERIOD
-from hoop_guide.puzzle_mode import MOVE_LEAD_TIME
+from hoop_guide.puzzle_mode import MOVE_OVERHEAD
 from hoop_guide.puzzle_mode import PuzzleMode
 from hoop_guide.puzzle_mode import SystemClock
 from hoop_guide.rods import STOP_HEIGHT
@@ -35,6 +35,7 @@ ANGULAR_VELOCITY = 0.2  # [rad/s]
 MOVING_CHECKS = 10  # each step takes 10 * MOTION_POLL_PERIOD
 SYNC_HEIGHT = PLATE_HEIGHT + 0.2 + SYNC_DISTANCE
 BOTTOM_HEIGHT = PLATE_HEIGHT + STOP_HEIGHT
+FAKE_MOVE_TIME = 0.25  # what the fake robot reports for every move [s]
 ENTER_TIME = 8.0  # after the measurement of about 5 s [s]
 STOP_ON_ROD_TIME = 8.5  # a few steps down the rod [s]
 
@@ -113,6 +114,11 @@ class FakeMotion:
         self._is_reachable = is_reachable
         self._remaining_checks = 0
         self.moves = []
+
+    def get_move_time(self, hoop_pose):
+        if not self._is_reachable(hoop_pose, self._clock.time):
+            raise NoJointConfigError("No joint configuration.")
+        return FAKE_MOVE_TIME
 
     def move_to_ik(self, hoop_pose):
         if not self._is_reachable(hoop_pose, self._clock.time):
@@ -276,7 +282,7 @@ def test_moves_aim_at_the_plate_predicted_for_the_arrival():
         if pose[2, 3] == pytest.approx(SYNC_HEIGHT)
     ]
     for time, pose in sync_moves:
-        plate = plate_pose_at(time + MOVE_LEAD_TIME)
+        plate = plate_pose_at(time + FAKE_MOVE_TIME + MOVE_OVERHEAD)
         np.testing.assert_allclose(pose[:2, 3], (plate.x, plate.y), atol=1e-6)
 
 

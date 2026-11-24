@@ -69,7 +69,7 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 5. At 3.5 cm above the plate the hoop follows the rotation for 1 s.
 6. Goes back up the rod to the synchronization point and then home.
 
-Every step is aimed where the rod will be 0.4 s later and the next one is sent when the robot stands still.
+Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs` plus a fixed overhead (`MOVE_OVERHEAD`). The next step is sent when the robot stands still. The log has the expected and the real time of every step.
 
 ## Manual move
 
