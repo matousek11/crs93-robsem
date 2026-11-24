@@ -19,8 +19,8 @@ from hoop_guide.vision import Frame
 
 logger = logging.getLogger(__name__)
 
-# TODO: measure in the lab. None stops every puzzle run before the robot moves.
-PLATE_HEIGHT: float | None = None
+
+PLATE_HEIGHT: float | None = 0.07
 """Height of the plate top surface above the robot base frame origin, the
 surface the robot stands on [m]."""
 
