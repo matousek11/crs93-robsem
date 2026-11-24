@@ -5,9 +5,10 @@ import pytest
 
 from hoop_guide.app import App
 from hoop_guide.cli import Config
+from hoop_guide.rods import Puzzle
 
-MODE_KEYS = ["1", "2", "3", "4", "5"]
-HARDWARE_ACTIONS = {"6": "soft_home", "7": "release", "8": "reset_motors"}
+MODE_KEYS = {"1": Puzzle.A1, "2": Puzzle.A2, "3": Puzzle.B}
+HARDWARE_ACTIONS = {"4": "soft_home", "5": "release", "6": "reset_motors"}
 
 
 class FakeRobot:
@@ -72,6 +73,17 @@ class FakeUI:
         yield
 
 
+class FakePuzzleMode:
+    def __init__(self, log, failure=None):
+        self._log = log
+        self._failure = failure
+
+    def run(self, puzzle):
+        self._log.append(("puzzle", puzzle))
+        if self._failure is not None:
+            raise self._failure
+
+
 def run_app(  # noqa: PLR0913, PLR0917
     tmp_path,
     answers=(),
@@ -79,8 +91,9 @@ def run_app(  # noqa: PLR0913, PLR0917
     should_home=True,
     failures=None,
     extra_actions=(),
+    puzzle_failure=None,
 ):
-    log: list[tuple[str, str]] = []
+    log: list[tuple[str, object]] = []
     robot = FakeRobot(log, is_real=is_real, failures=failures)
     ui = FakeUI(log, answers)
     config = Config(
@@ -89,7 +102,15 @@ def run_app(  # noqa: PLR0913, PLR0917
         should_home=should_home,
         should_show_view=False,
     )
-    App(config, robot, ui, tmp_path, extra_actions).run()
+    puzzle_mode = FakePuzzleMode(log, puzzle_failure)
+    App(
+        config,
+        robot,
+        ui,
+        tmp_path,
+        puzzle_mode=puzzle_mode,
+        extra_actions=extra_actions,
+    ).run()
     return log, robot
 
 
@@ -164,7 +185,7 @@ def test_ctrl_c_is_ignored_during_shutdown_and_restored_after(tmp_path):
 def test_failed_initialization_skips_menu_and_shuts_down(tmp_path):
     failures = {"initialize(should_home=True)": RuntimeError("no controller")}
 
-    log, _ = run_app(tmp_path, answers=["6"], failures=failures)
+    log, _ = run_app(tmp_path, answers=["4"], failures=failures)
 
     assert robot_calls(log) == ["initialize(should_home=True)", "shutdown"]
     assert messages(log, "error")[0].startswith("Initialization failed.")
@@ -179,17 +200,40 @@ def test_failed_shutdown_shows_error(tmp_path):
 
 
 def test_invalid_option_shows_warning_and_returns_to_menu(tmp_path):
-    log, _ = run_app(tmp_path, answers=["42", "6", "0"])
+    log, _ = run_app(tmp_path, answers=["42", "4", "0"])
 
     assert "Invalid option '42'." in messages(log, "warning")
     assert "soft_home" in robot_calls(log)
 
 
-@pytest.mark.parametrize("key", MODE_KEYS)
-def test_puzzle_modes_are_not_implemented_yet(tmp_path, key):
+@pytest.mark.parametrize(
+    ("key", "puzzle"),
+    MODE_KEYS.items(),
+    ids=[p.value for p in MODE_KEYS.values()],
+)
+def test_mode_runs_the_puzzle_of_its_key(tmp_path, key, puzzle):
     log, _ = run_app(tmp_path, answers=[key, "0"])
 
-    assert messages(log, "warning")[-1].endswith("is not implemented yet.")
+    assert messages(log, "puzzle") == [puzzle]
+
+
+def test_mode_not_implemented_yet_is_reported_and_the_menu_goes_on(tmp_path):
+    log, _ = run_app(
+        tmp_path, answers=["1", "1", "0"], puzzle_failure=NotImplementedError()
+    )
+
+    assert (
+        messages(log, "warning")[-2:] == ["Mode A1 is not implemented yet."] * 2
+    )
+
+
+def test_failed_mode_is_reported_and_the_menu_goes_on(tmp_path):
+    log, _ = run_app(
+        tmp_path, answers=["3", "3", "0"], puzzle_failure=RuntimeError("stop")
+    )
+
+    assert len(messages(log, "error")) == 2
+    assert messages(log, "error")[0].startswith("Mode B failed.")
 
 
 @pytest.mark.parametrize(("key", "call"), HARDWARE_ACTIONS.items())
@@ -214,7 +258,7 @@ def test_hardware_action_is_blocked_on_virtual_robot(tmp_path, key):
 
 
 def test_release_asks_for_confirmation_first(tmp_path):
-    log, _ = run_app(tmp_path, answers=["7", "0"])
+    log, _ = run_app(tmp_path, answers=["5", "0"])
 
     confirms = [i for i, entry in enumerate(log) if entry[0] == "confirm"]
     assert confirms[-1] < log.index(("robot", "release"))
@@ -223,13 +267,13 @@ def test_release_asks_for_confirmation_first(tmp_path):
 def test_failed_hardware_action_shows_error_and_returns_to_menu(tmp_path):
     failures = {"soft_home": RuntimeError("motor error")}
 
-    log, _ = run_app(tmp_path, answers=["6", "8", "0"], failures=failures)
+    log, _ = run_app(tmp_path, answers=["4", "6", "0"], failures=failures)
 
     assert messages(log, "error")[0].startswith("Soft home failed.")
     assert "reset_motors" in robot_calls(log)
 
 
-EXTRA_ACTION_KEY = "9"
+EXTRA_ACTION_KEY = "7"
 
 
 def test_extra_action_is_offered_after_the_built_in_ones(tmp_path):

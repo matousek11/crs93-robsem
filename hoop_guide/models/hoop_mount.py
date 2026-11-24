@@ -15,14 +15,19 @@ GRIP_TO_HOOP_CENTER = 0.135
 FLANGE_TO_GRIP = 0.0
 """Distance from the flange face to the gripped hole of the handle [m]."""
 
+HOOP_THICKNESS = 0.0066
+"""Size of the hoop along its axis, which is the flange z axis [m]."""
+
+ADAPTER = 0.01
+
 # Assumes the hoop center lies on the flange z axis and the hoop frame is not
 # rotated against the flange frame. TODO: verify both in the lab.
 FLANGE_TO_HOOP = Pose(
     np.array(
         [
-            [1.0, 0.0, 0.0, -0.135],
+            [1.0, 0.0, 0.0, -GRIP_TO_HOOP_CENTER],
             [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, (0.01 + 0.007)],
+            [0.0, 0.0, 1.0, (ADAPTER + (HOOP_THICKNESS / 2))],
             [0.0, 0.0, 0.0, 1.0],
         ]
     )

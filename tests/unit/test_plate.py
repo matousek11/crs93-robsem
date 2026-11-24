@@ -4,9 +4,14 @@ import numpy as np
 import pytest
 
 from hoop_guide.plate import MARKER_CENTERS
+from hoop_guide.plate import PlatePose
 from hoop_guide.plate import estimate_plate_pose
+from hoop_guide.plate import plate_to_robot_directions
+from hoop_guide.plate import plate_to_robot_points
 from hoop_guide.types import Homography
 from hoop_guide.types import PixelPoints
+from hoop_guide.types import PlateDirections3D
+from hoop_guide.types import PlatePoints3D
 from hoop_guide.vision import MarkerDetection
 
 IDENTITY = Homography(np.eye(3))
@@ -175,3 +180,45 @@ def test_unknown_marker_is_ignored():
 )
 def test_no_known_marker_returns_none(markers):
     assert estimate_plate_pose(markers, IDENTITY) is None
+
+
+# plate_to_robot_points and plate_to_robot_directions
+
+PLATE_HEIGHT = 0.08  # [m]
+
+
+def test_points_of_an_unturned_plate_are_only_shifted():
+    points = PlatePoints3D(np.array([[0.0, 0.0, 0.0], [0.01, -0.02, 0.2]]))
+
+    result = plate_to_robot_points(
+        points, PlatePose(0.4, 0.1, 0.0), PLATE_HEIGHT
+    )
+
+    np.testing.assert_allclose(
+        result, [[0.4, 0.1, 0.08], [0.41, 0.08, 0.28]], atol=1e-12
+    )
+
+
+def test_points_turn_with_the_plate_about_its_center():
+    points = PlatePoints3D(np.array([[0.05, 0.0, 0.1]]))
+
+    result = plate_to_robot_points(
+        points, PlatePose(0.4, 0.1, math.pi / 2), PLATE_HEIGHT
+    )
+
+    # A quarter turn maps the plate x axis onto the robot y axis.
+    np.testing.assert_allclose(result, [[0.4, 0.15, 0.18]], atol=1e-12)
+
+
+def test_directions_turn_with_the_plate_and_are_not_shifted():
+    directions = PlateDirections3D(
+        np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+    )
+
+    result = plate_to_robot_directions(
+        directions, PlatePose(0.4, 0.1, math.pi / 2)
+    )
+
+    np.testing.assert_allclose(
+        result, [[0.0, 1.0, 0.0], [0.0, 0.0, -1.0]], atol=1e-12
+    )

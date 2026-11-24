@@ -8,17 +8,20 @@ from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 
 from hoop_guide.cli import Config
 from hoop_guide.hardware.interfaces import RobotControl
 from hoop_guide.logs import LOG_FILE_NAME
+from hoop_guide.rods import Puzzle
 from hoop_guide.ui import MenuOption
 from hoop_guide.ui import Status
 from hoop_guide.ui import UserInterface
 
 logger = logging.getLogger(__name__)
 
-PUZZLE_MODES = ("A1", "A2", "B", "C", "D")
+MENU_PUZZLES = (Puzzle.A1, Puzzle.A2, Puzzle.B)
+"""Puzzles offered in the menu, the others are not ready yet."""
 QUIT_KEY = "0"
 NO_MODE = "None"
 
@@ -33,6 +36,13 @@ def _ignore_ctrl_c() -> Iterator[None]:
         signal.signal(signal.SIGINT, previous)
 
 
+class PuzzleRunner(Protocol):
+    """Runs the mode that guides the hoop through a puzzle."""
+
+    def run(self, puzzle: Puzzle) -> None:
+        """Goes through the rod of the puzzle, until done or stopped."""
+
+
 class App:
     """Terminal application controlling one robot.
 
@@ -41,22 +51,26 @@ class App:
         robot: Real or virtual robot.
         ui: User interface.
         run_dir: Folder with logs of this run.
+        puzzle_mode: Runs the menu item of every puzzle.
         extra_actions: Label and function of every menu item added
             after the built in ones.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         config: Config,
         robot: RobotControl,
         ui: UserInterface,
         run_dir: Path,
+        *,
+        puzzle_mode: PuzzleRunner,
         extra_actions: Sequence[tuple[str, Callable[[], None]]] = (),
     ) -> None:
         self._config = config
         self._robot = robot
         self._ui = ui
         self._run_dir = run_dir
+        self._puzzle_mode = puzzle_mode
         self._extra_actions = extra_actions
         self._actions = self._build_actions()
 
@@ -72,8 +86,8 @@ class App:
 
     def _build_actions(self) -> dict[str, tuple[str, Callable[[], None]]]:
         entries: list[tuple[str, Callable[[], None]]] = [
-            (f"Mode {mode}", functools.partial(self._run_mode, mode))
-            for mode in PUZZLE_MODES
+            (f"Mode {puzzle.value}", functools.partial(self._run_mode, puzzle))
+            for puzzle in MENU_PUZZLES
         ]
         entries += [
             ("Soft home", self._soft_home),
@@ -128,8 +142,15 @@ class App:
             logger.info("Selected %s.", label)
             action()
 
-    def _run_mode(self, mode: str) -> None:
-        self._warning(f"Mode {mode} is not implemented yet.")
+    def _run_mode(self, puzzle: Puzzle) -> None:
+        label = f"Mode {puzzle.value}"
+        self._show(label)
+        try:
+            self._puzzle_mode.run(puzzle)
+        except NotImplementedError:
+            self._warning(f"{label} is not implemented yet.")
+        except Exception:
+            self._fail(f"{label} failed.")
 
     def _soft_home(self) -> None:
         self._hardware_action("Soft home", self._robot.soft_home)

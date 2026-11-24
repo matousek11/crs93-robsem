@@ -106,7 +106,7 @@ class ManualState:
         of the robot frame, right counterclockwise when viewed against the
         axis. Enter asks for a move to
         the whole target, on the Exit row it asks to leave. Space asks to
-        record a calibration point.
+        record a calibration point. Other keys do nothing.
 
         Args:
             key: Pressed key.
@@ -121,6 +121,8 @@ class ManualState:
             return self._change_target(_TARGET_CHANGE_SIGN_BY_KEY[key]), None
         if key is Key.SPACE:
             return self, ManualCommand.RECORD
+        if key is not Key.ENTER:
+            return self, None
         if self.selected_row is ManualRow.EXIT:
             return self, ManualCommand.EXIT
         return self, ManualCommand.MOVE

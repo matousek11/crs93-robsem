@@ -24,6 +24,12 @@ Points3D = NewType("Points3D", NDArray[np.float64])
 Directions3D = NewType("Directions3D", NDArray[np.float64])
 """Unit vectors in the robot frame, shape (N, 3)."""
 
+PlatePoints3D = NewType("PlatePoints3D", NDArray[np.float64])
+"""Points in the plate frame (see plate.py), shape (N, 3), meters."""
+
+PlateDirections3D = NewType("PlateDirections3D", NDArray[np.float64])
+"""Unit vectors in the plate frame (see plate.py), shape (N, 3)."""
+
 Homography = NewType("Homography", NDArray[np.float64])
 """Maps image points to the table plane in the robot frame, shape (3, 3)."""
 

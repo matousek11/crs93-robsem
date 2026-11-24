@@ -379,6 +379,15 @@ def test_enter_and_space_give_a_command(row, key, expected_command):
     assert state is previous_state
 
 
+def test_stop_key_does_nothing_in_the_manual_mode():
+    previous_state = make_state(ManualRow.X)
+
+    state, command = previous_state.handle_key(Key.STOP)
+
+    assert state is previous_state
+    assert command is None
+
+
 # ManualMode.run
 
 
