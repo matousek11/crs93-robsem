@@ -12,18 +12,15 @@ error of the prediction or of the step times.
 """
 
 import math
-from typing import Protocol
 
 import numpy as np
 
-from hoop_guide.control import MOVE_OVERHEAD
-from hoop_guide.control import get_lead_time
-from hoop_guide.control import get_move_time
+from hoop_guide.planning import Kinematics
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
+from hoop_guide.planning import choose_handle_angle
+from hoop_guide.planning import plan_step
 from hoop_guide.types import JointConfig
-from hoop_guide.types import JointSpeeds
-from hoop_guide.types import Pose
 
 BOTTOM_WAIT = 1.0
 """How long the hoop follows the last path point before going back [s]."""
@@ -52,75 +49,26 @@ JOINT_MARGIN_TOLERANCE = math.radians(2.0)
 best one count as equally good, the earliest of them is chosen, because
 the prediction gets worse with time [rad]."""
 
-MAX_JOINT_STEP = math.radians(45.0)
-"""Largest change of one joint in one step. A larger one means the joint
-configuration flips and the arm would swing with the hoop on the rod."""
-
 _SYNC_INDEX = 0
-
-
-class Kinematics(Protocol):
-    """Joint configurations and speeds of the robot."""
-
-    @property
-    def joint_speeds(self) -> JointSpeeds:
-        """Speeds of the joints in a move [rad/s]."""
-
-    @property
-    def joint_limits(self) -> tuple[JointConfig, JointConfig]:
-        """Lowest and highest angle of every joint [rad]."""
-
-    def choose_joint_config(
-        self, hoop_pose: Pose, joint_angles: JointConfig
-    ) -> JointConfig:
-        """Returns the reaching configuration nearest to the joint angles.
-
-        Raises:
-            NoJointConfigError: The pose is out of reach or only beyond the
-                joint limits.
-        """
-
-
-class JointFlipError(RuntimeError):
-    """Raised when a step changes a joint by more than MAX_JOINT_STEP."""
-
-
-def check_joint_step(start: JointConfig, target: JointConfig) -> None:
-    """Checks that no joint changes by more than MAX_JOINT_STEP.
-
-    Args:
-        start: Joint angles before the step [rad].
-        target: Joint angles after the step [rad].
-
-    Raises:
-        JointFlipError: A joint changes by more, the message names it.
-    """
-    changes = np.abs(target - start)
-    joint_index = int(np.argmax(changes))
-    if float(changes[joint_index]) > MAX_JOINT_STEP:
-        raise JointFlipError(
-            f"Joint {joint_index + 1} would turn by"
-            f" {math.degrees(float(changes[joint_index])):.0f} deg in one"
-            " step."
-        )
 
 
 def find_start_time(
     planner: RodPlanner,
     kinematics: Kinematics,
     joint_angles: JointConfig,
+    handle_angle: float,
     now: float,
 ) -> float | None:
     """Returns the start of a run down the rod with the most joint margin.
 
     Tried every SEARCH_STEP from now + EARLIEST_START to now +
     SEARCH_WINDOW. Until the start the hoop follows the synchronization
-    point, which must stay reachable from now on,
-    later starts are not tried once it is not. From the start the run goes
-    down the rod, follows the last point for BOTTOM_WAIT and goes back up to
-    the synchronization point, as PuzzleMode does. Every point must be
-    reachable within TIME_MARGIN of the time it is reached and no step may
-    flip the joint configuration.
+    point, which must stay reachable from now on, later starts are not tried
+    once it is not. From the start the run goes down the rod, follows the
+    last point for BOTTOM_WAIT and goes back up to the synchronization
+    point, every step planned by plan_step as PuzzleMode does. Every point
+    must also be reachable with its handle angle within TIME_MARGIN of the
+    time it is reached.
 
     The margin of a run is the smallest distance of a joint from its limit
     on the rod, waiting at the synchronization point does not count: a
@@ -132,27 +80,31 @@ def find_start_time(
         kinematics: Joint configurations and speeds of the robot.
         joint_angles: Joint angles now, with the hoop at the synchronization
             point [rad].
+        handle_angle: Handle angle now, see RodPlanner.get_hoop_pose [rad].
         now: time.monotonic now [s].
 
     Returns:
         time.monotonic of the start [s], None when no start goes through.
     """
-    last_index = planner.point_count - 1
-    waiting_angles = joint_angles
     margin_by_start: dict[float, float] = {}
     for search_index in range(round(SEARCH_WINDOW / SEARCH_STEP) + 1):
         start_time = now + search_index * SEARCH_STEP
         try:
             # Waiting at the synchronization point until the start.
-            waiting_angles = _choose_checked(
-                planner, kinematics, _SYNC_INDEX, start_time, waiting_angles
+            handle_angle, joint_angles = choose_handle_angle(
+                planner,
+                kinematics,
+                _SYNC_INDEX,
+                start_time,
+                joint_angles,
+                previous_angle=handle_angle,
             )
-        except (NoJointConfigError, ValueError, JointFlipError):
+        except (NoJointConfigError, ValueError):
             break
         if start_time < now + EARLIEST_START:
             continue
         margin = _simulate_run(
-            planner, kinematics, waiting_angles, start_time, last_index
+            planner, kinematics, joint_angles, handle_angle, start_time
         )
         if margin is not None:
             margin_by_start[start_time] = margin
@@ -170,8 +122,8 @@ def _simulate_run(
     planner: RodPlanner,
     kinematics: Kinematics,
     joint_angles: JointConfig,
+    handle_angle: float,
     start_time: float,
-    last_index: int,
 ) -> float | None:
     """Simulates the run from start_time.
 
@@ -179,70 +131,78 @@ def _simulate_run(
         The smallest distance of a joint from its limit in the run [rad],
         None when a step does not go.
     """
-    time, angles = start_time, joint_angles
+    last_index = planner.point_count - 1
+    way_down = list(range(_SYNC_INDEX + 1, last_index + 1))
+    way_up = list(range(last_index - 1, _SYNC_INDEX - 1, -1))
+    time, angles, angle = start_time, joint_angles, handle_angle
     margin = math.inf
     try:
-        for index in range(_SYNC_INDEX + 1, last_index + 1):
-            time, angles, step_margin = _simulate_step(
-                planner, kinematics, index, time, angles
+        for index in way_down:
+            time, angles, angle, step_margin = _simulate_step(
+                planner, kinematics, index, time, angles, angle
             )
             margin = min(margin, step_margin)
         wait_end = time + BOTTOM_WAIT
         while time < wait_end:
-            time, angles, step_margin = _simulate_step(
-                planner, kinematics, last_index, time, angles
+            time, angles, angle, step_margin = _simulate_step(
+                planner, kinematics, last_index, time, angles, angle
             )
             margin = min(margin, step_margin)
-        for index in range(last_index - 1, _SYNC_INDEX - 1, -1):
-            time, angles, step_margin = _simulate_step(
-                planner, kinematics, index, time, angles
+        for index in way_up:
+            time, angles, angle, step_margin = _simulate_step(
+                planner, kinematics, index, time, angles, angle
             )
             margin = min(margin, step_margin)
-    except (NoJointConfigError, ValueError, JointFlipError):
+    except (NoJointConfigError, ValueError):
         return None
     return margin
 
 
-def _simulate_step(
+def _simulate_step(  # noqa: PLR0913, PLR0917
     planner: RodPlanner,
     kinematics: Kinematics,
     index: int,
     sent_time: float,
     joint_angles: JointConfig,
-) -> tuple[float, JointConfig, float]:
+    handle_angle: float,
+) -> tuple[float, JointConfig, float, float]:
     """Simulates PuzzleMode._step.
 
     Returns:
-        When the next step is sent [s], the joint angles then [rad] and the
-        smallest distance of a joint from its limit around the arrival
-        [rad].
+        When the next step is sent [s], the joint angles then [rad], the
+        handle angle then [rad] and the smallest distance of a joint from
+        its limit around the arrival [rad].
 
     Raises:
         NoJointConfigError: The point is not reachable around the arrival.
         ValueError: The planner cannot give a pose for the point.
-        JointFlipError: The step flips the joint configuration.
     """
-    estimate = planner.get_hoop_pose(sent_time + MOVE_OVERHEAD, index)
-    move_time = get_move_time(
+    step = plan_step(
+        planner,
+        kinematics,
+        index,
+        sent_time,
         joint_angles,
-        kinematics.choose_joint_config(estimate, joint_angles),
-        kinematics.joint_speeds,
+        handle_angle=handle_angle,
     )
-    arrival_time = sent_time + get_lead_time(move_time)
-    angles = _choose_checked(
-        planner, kinematics, index, arrival_time, joint_angles
-    )
-    limit_margin = _get_limit_margin(angles, kinematics.joint_limits)
+    limit_margin = _get_limit_margin(step.joint_angles, kinematics.joint_limits)
     for time_offset in (-TIME_MARGIN, TIME_MARGIN):
+        nearby_pose = planner.get_hoop_pose(
+            step.arrival_time + time_offset, index, step.handle_angle
+        )
         nearby_angles = kinematics.choose_joint_config(
-            planner.get_hoop_pose(arrival_time + time_offset, index),
-            joint_angles,
+            nearby_pose, joint_angles
         )
         limit_margin = min(
             limit_margin,
             _get_limit_margin(nearby_angles, kinematics.joint_limits),
         )
-    return arrival_time + READY_FLAG_DELAY, angles, limit_margin
+    return (
+        step.arrival_time + READY_FLAG_DELAY,
+        step.joint_angles,
+        step.handle_angle,
+        limit_margin,
+    )
 
 
 def _get_limit_margin(
@@ -253,24 +213,3 @@ def _get_limit_margin(
     return float(
         np.min(np.minimum(joint_angles - lowest, highest - joint_angles))
     )
-
-
-def _choose_checked(
-    planner: RodPlanner,
-    kinematics: Kinematics,
-    index: int,
-    time: float,
-    joint_angles: JointConfig,
-) -> JointConfig:
-    """Returns the configuration for a point at a time, from joint_angles.
-
-    Raises:
-        NoJointConfigError: The point is not reachable then.
-        ValueError: The planner cannot give a pose for the point.
-        JointFlipError: The configuration flips from joint_angles.
-    """
-    angles = kinematics.choose_joint_config(
-        planner.get_hoop_pose(time, index), joint_angles
-    )
-    check_joint_step(joint_angles, angles)
-    return angles

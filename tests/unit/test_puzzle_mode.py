@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from hoop_guide.control import MOVE_OVERHEAD
-from hoop_guide.control import MOVE_TIME_FACTOR
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import SYNC_DISTANCE
@@ -44,7 +43,6 @@ ANGULAR_VELOCITY = 0.2  # [rad/s]
 MOVING_CHECKS = 15
 SYNC_HEIGHT = PLATE_HEIGHT + 0.2 + SYNC_DISTANCE
 BOTTOM_HEIGHT = PLATE_HEIGHT + STOP_HEIGHT
-FAKE_MOVE_TIME = 0.25  # what the fake robot reports for every move [s]
 ENTER_TIME = 8.0  # after the measurement of about 5 s [s]
 # A few steps down the rod, after the start EARLIEST_START after Enter [s].
 STOP_ON_ROD_TIME = ENTER_TIME + EARLIEST_START + 1.5
@@ -166,11 +164,6 @@ class FakeMotion:
         )
         fourth_joint = math.pi if is_flipped else 0.0
         return JointConfig(np.r_[hoop_pose[:3, 3], fourth_joint, 0.0, 0.0])
-
-    def get_move_time(self, hoop_pose):
-        if not self._is_reachable(hoop_pose, self._clock.time):
-            raise NoJointConfigError("No joint configuration.")
-        return FAKE_MOVE_TIME
 
     def move_to_ik(self, hoop_pose):
         if not self._is_reachable(hoop_pose, self._clock.time):
@@ -344,10 +337,9 @@ def test_moves_aim_at_the_plate_predicted_for_the_arrival():
         if pose[2, 3] == pytest.approx(SYNC_HEIGHT)
     ]
     for time, pose in sync_moves:
-        plate = plate_pose_at(
-            time + MOVE_TIME_FACTOR * FAKE_MOVE_TIME + MOVE_OVERHEAD
-        )
-        np.testing.assert_allclose(pose[:2, 3], (plate.x, plate.y), atol=1e-6)
+        # The fake joints are fast, the move itself takes almost no time.
+        plate = plate_pose_at(time + MOVE_OVERHEAD)
+        np.testing.assert_allclose(pose[:2, 3], (plate.x, plate.y), atol=1e-4)
 
 
 def test_hoop_goes_down_then_follows_the_bottom_then_goes_back_up():

@@ -23,6 +23,14 @@ from hoop_guide.vision import MarkerDetection
 from hoop_guide.vision import image_to_plane
 
 PLATE_SIZE = 0.125  # 12.5 cm
+
+PLATE_HEIGHT = 0.07
+"""Height of the plate top surface above the robot base frame origin, the
+surface the robot stands on [m].
+
+The rod path starts from it and nothing of the robot or the hoop may get
+below it, see MIN_HEIGHT in collision.py.
+"""
 MARKER_SIZE = 0.040  # 4 cm
 
 # Marker centers in the plate frame [m], top left and bottom right in the

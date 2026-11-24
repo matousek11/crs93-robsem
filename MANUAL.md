@@ -62,7 +62,7 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 
 ## Puzzle mode
 
-1. Checks that the camera, a saved homography and `PLATE_HEIGHT` in `hoop_guide/puzzle_mode.py` are there, otherwise nothing moves.
+1. Checks that the camera and a saved homography are there, otherwise nothing moves. The height of the plate is `PLATE_HEIGHT` in `hoop_guide/plate.py`.
 2. Measures the table motion from the first 50 frames with the plate, right at the start. The arm must not hide the markers. Without the plate for 15 s the mode ends.
 3. Moves the hoop to the synchronization point, 10 cm above the free end of the rod, and follows the rotation there.
 4. Enter simulates the whole run down the rod and back for starts in the next 20 s and picks the first one where every point is reachable and no joint flips. The hoop follows the synchronization point until then. Without such a start a warning is shown, Enter searches again.
@@ -70,13 +70,13 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 6. At 4 cm above the plate the hoop follows the rotation for 1 s.
 7. Goes back up the rod to the synchronization point and then home.
 
-Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs`, times `MOVE_TIME_FACTOR` for speeding up and slowing down, plus `MOVE_OVERHEAD`. The next step is sent when the robot stands still. The log has the expected and the real time and the joint angles of every step.
+Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs`, times `MOVE_TIME_FACTOR` for speeding up and slowing down, plus `MOVE_OVERHEAD`. The next step is sent when the robot stands still. The log has the expected and the real time, the handle angle and the joint angles of every step.
 
-A step that would turn a joint by more than 45° is not sent, it would mean the arm swings into another joint configuration with the hoop on the rod. On the rod the hoop goes back out instead. Only the first move from home to the synchronization point may turn the joints further.
+The handle points toward the robot base at the start. Every step keeps the handle angle of the previous one when the robot can reach the point with it, otherwise it tries angles 10°, 20° and so on away from it, on both sides, and takes the first that goes. A handle angle goes when the joints are within their limits, above the table and none turns by more than 45° in the step, a larger turn would mean the arm swings into another joint configuration with the hoop on the rod. When no angle goes, the hoop goes back out of the rod. Only the first move from home to the synchronization point may turn the joints further. The start search simulates the same choice.
 
 ## Table check
 
-No move is sent that would bring the robot or the hoop below 7 cm above the robot base frame origin (`MIN_HEIGHT` in `hoop_guide/collision.py`). The arm joints are checked with a radius of 4 cm, the flange with 3 cm and the hoop at the lowest point of its ring. The radii are estimates. A pose that only goes below is treated as out of reach, in every mode including the manual move.
+No move is sent that would bring the robot or the hoop below the plate top, `PLATE_HEIGHT` in `hoop_guide/plate.py`, now 7 cm above the robot base frame origin. The arm joints are checked with a radius of 4 cm, the flange with 3 cm and the hoop at the lowest point of its ring. The radii are estimates. A pose that only goes below is treated as out of reach, in every mode including the manual move.
 
 For the calibration this means the hoop center must stay at least about 10 cm high with the flange pointing down, the flange is then beside the hoop at the same height.
 

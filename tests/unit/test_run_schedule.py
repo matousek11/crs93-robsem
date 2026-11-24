@@ -9,10 +9,7 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import PlatePose
 from hoop_guide.rods import Puzzle
 from hoop_guide.run_schedule import EARLIEST_START
-from hoop_guide.run_schedule import MAX_JOINT_STEP
 from hoop_guide.run_schedule import SEARCH_WINDOW
-from hoop_guide.run_schedule import JointFlipError
-from hoop_guide.run_schedule import check_joint_step
 from hoop_guide.run_schedule import find_start_time
 from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
@@ -84,7 +81,7 @@ def planner_with_plate_at(angle):
 def search(planner, kinematics, now=0.0):
     sync_pose = planner.update(now, 0)[0]
     joint_angles = JointConfig(np.r_[sync_pose[:3, 3], 0.0, 0.0, 0.0])
-    return find_start_time(planner, kinematics, joint_angles, now)
+    return find_start_time(planner, kinematics, joint_angles, 0.0, now)
 
 
 def is_far_or_high(pose):
@@ -157,19 +154,13 @@ def test_flip_of_the_joint_configuration_gives_no_start():
     assert search(planner_with_plate_at(0.0), kinematics) is None
 
 
-# check_joint_step
+def test_start_is_found_by_turning_the_handle_away_from_the_robot():
+    # Low points are reachable only with the handle not toward the robot.
+    def is_reachable(pose):
+        return pose[2, 3] >= LOW or pose[0, 0] > -0.5
 
+    start_time = search(
+        planner_with_plate_at(0.0), FakeKinematics(is_reachable)
+    )
 
-def test_step_within_the_largest_joint_change_passes():
-    start = JointConfig(np.zeros(6))
-    target = JointConfig(np.full(6, MAX_JOINT_STEP))
-
-    check_joint_step(start, target)
-
-
-def test_step_beyond_the_largest_joint_change_names_the_joint():
-    start = JointConfig(np.zeros(6))
-    target = JointConfig(np.array([0.1, 0.0, 0.0, 0.0, 0.0, -math.pi]))
-
-    with pytest.raises(JointFlipError, match="Joint 6 would turn by 180 deg"):
-        check_joint_step(start, target)
+    assert start_time == pytest.approx(EARLIEST_START)
