@@ -24,14 +24,17 @@ HOOP_INNER_RADIUS = 0.030
 HOOP_RING_WIDTH = 0.0037
 """Width of the ring of the hoop, from its hole to its outer edge [m]."""
 
+ADAPTER = 0.01
+
+
 # Assumes the hoop center lies on the flange z axis and the hoop frame is not
 # rotated against the flange frame. TODO: verify both in the lab.
 FLANGE_TO_HOOP = Pose(
     np.array(
         [
-            [1.0, 0.0, 0.0, -(FLANGE_TO_GRIP + GRIP_TO_HOOP_CENTER)],
+            [1.0, 0.0, 0.0, -GRIP_TO_HOOP_CENTER],
             [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, HOOP_THICKNESS / 2],
+            [0.0, 0.0, 1.0, (ADAPTER + (HOOP_THICKNESS / 2))],
             [0.0, 0.0, 0.0, 1.0],
         ]
     )
