@@ -3,9 +3,11 @@ import math
 import numpy as np
 import pytest
 
+from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import SYNC_DISTANCE
 from hoop_guide.planning import NoJointConfigError
+from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import MARKER_CENTERS
 from hoop_guide.plate import MARKER_SIZE
 from hoop_guide.plate import PlatePose
@@ -13,6 +15,7 @@ from hoop_guide.puzzle_mode import BOTTOM_WAIT
 from hoop_guide.puzzle_mode import MEASUREMENT_TIMEOUT
 from hoop_guide.puzzle_mode import MOTION_POLL_PERIOD
 from hoop_guide.puzzle_mode import MOVE_OVERHEAD
+from hoop_guide.puzzle_mode import MOVE_TIME_FACTOR
 from hoop_guide.puzzle_mode import PuzzleMode
 from hoop_guide.puzzle_mode import SystemClock
 from hoop_guide.rods import STOP_HEIGHT
@@ -282,7 +285,9 @@ def test_moves_aim_at_the_plate_predicted_for_the_arrival():
         if pose[2, 3] == pytest.approx(SYNC_HEIGHT)
     ]
     for time, pose in sync_moves:
-        plate = plate_pose_at(time + FAKE_MOVE_TIME + MOVE_OVERHEAD)
+        plate = plate_pose_at(
+            time + MOVE_TIME_FACTOR * FAKE_MOVE_TIME + MOVE_OVERHEAD
+        )
         np.testing.assert_allclose(pose[:2, 3], (plate.x, plate.y), atol=1e-6)
 
 
@@ -303,6 +308,13 @@ def test_hoop_goes_down_then_follows_the_bottom_then_goes_back_up():
     assert at_bottom[-1] - at_bottom[0] >= BOTTOM_WAIT - step_time
     rest = after_enter[lowest + len(at_bottom) :]
     assert np.all(np.diff(rest) > 0)
+
+
+def test_operator_messages_are_also_logged(caplog):
+    with caplog.at_level("INFO", logger="hoop_guide.puzzle_mode"):
+        run = complete_run()
+
+    assert set(run.reporter.infos) <= {r.getMessage() for r in caplog.records}
 
 
 def test_stop_during_the_measurement_ends_without_moving():
@@ -340,8 +352,13 @@ def test_stop_on_the_rod_goes_back_out_and_home():
 
 
 def test_stop_while_following_the_bottom_goes_back_out_and_home():
-    # Ten steps of 0.2 s down the rod A1 end at about 10 s.
-    stop_at_bottom_time = ENTER_TIME + 2.5
+    # Enter is noticed within one step after ENTER_TIME, then every point down
+    # the rod takes one step. Stop in the middle of BOTTOM_WAIT.
+    still_table = TableMotion(0.5, 0.0, 0.0, 0.0, PlatePose(0.5, 0.0, 0.0))
+    path = RodPlanner(Puzzle.A1, still_table, PLATE_HEIGHT).update(0.0, 0)
+    step_time = MOVING_CHECKS * MOTION_POLL_PERIOD
+    bottom_reached_time = ENTER_TIME + step_time + (len(path) - 1) * step_time
+    stop_at_bottom_time = bottom_reached_time + BOTTOM_WAIT / 2
     run = run_puzzle(
         timed_keys=[(ENTER_TIME, Key.ENTER), (stop_at_bottom_time, Key.STOP)]
     )

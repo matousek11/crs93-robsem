@@ -20,7 +20,7 @@ from hoop_guide.types import PlateDirections3D
 from hoop_guide.types import PlatePoints3D
 from hoop_guide.types import Pose
 
-PATH_STEP = 0.02
+PATH_STEP = 0.015
 """Distance between neighbouring points of the hoop path [m].
 
 Tangents are averaged over three neighbouring points, so this also sets how
