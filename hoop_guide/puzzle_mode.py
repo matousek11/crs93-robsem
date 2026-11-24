@@ -1,23 +1,24 @@
 """Run of one puzzle: the hoop goes through the rod of the rotating plate."""
 
 import logging
+import math
 import time
 from types import TracebackType
 from typing import Protocol
 from typing import Self
 
-from hoop_guide.control import MOVE_OVERHEAD
-from hoop_guide.control import get_lead_time
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
+from hoop_guide.planning import Kinematics
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
+from hoop_guide.planning import plan_step
+from hoop_guide.plate import PLATE_HEIGHT
 from hoop_guide.plate_tracker import PLATE_SAMPLE_COUNT
 from hoop_guide.plate_tracker import PlateTracker
 from hoop_guide.rods import Puzzle
 from hoop_guide.run_schedule import BOTTOM_WAIT
 from hoop_guide.run_schedule import SEARCH_WINDOW
-from hoop_guide.run_schedule import Kinematics
 from hoop_guide.run_schedule import find_start_time
 from hoop_guide.types import Homography
 from hoop_guide.types import JointConfig
@@ -26,10 +27,6 @@ from hoop_guide.vision import Frame
 
 logger = logging.getLogger(__name__)
 
-
-PLATE_HEIGHT: float | None = 0.07
-"""Height of the plate top surface above the robot base frame origin, the
-surface the robot stands on [m]."""
 
 MEASUREMENT_TIMEOUT = 15.0
 """Longest wait for the frames the table motion is measured from [s]."""
@@ -55,13 +52,6 @@ class PuzzleMotion(Kinematics, Protocol):
         Raises:
             NoJointConfigError: The pose cannot be reached, nothing is sent
                 to the robot.
-        """
-
-    def get_move_time(self, hoop_pose: Pose) -> float:
-        """Returns how long move_to_ik to the pose takes at full joint speeds.
-
-        Raises:
-            NoJointConfigError: The pose cannot be reached.
         """
 
     def is_in_motion(self) -> bool:
@@ -188,6 +178,7 @@ class PuzzleMode:
         self._homography = homography
         self._plate_height = plate_height
         self._clock: Clock = clock if clock is not None else SystemClock()
+        self._handle_angle = 0.0
 
     def run(self, puzzle: Puzzle) -> None:
         """Goes through the rod of the puzzle, until done or stopped.
@@ -201,6 +192,7 @@ class PuzzleMode:
         if frames is None or homography is None or plate_height is None:
             self._warn(self._missing_requirement())
             return
+        self._handle_angle = 0.0
         with self._keyboard:
             self._keyboard.discard_pending()
             table_motion = self._measure_table_motion(frames, homography)
@@ -264,7 +256,7 @@ class PuzzleMode:
         """
         self._info("Moving to the synchronization point.")
         try:
-            self._step(planner, _SYNC_INDEX)
+            self._step(planner, _SYNC_INDEX, can_flip=True)
             self._info(
                 "At the synchronization point. Press Enter to go down the rod,"
                 " c to stop."
@@ -287,7 +279,11 @@ class PuzzleMode:
         """Searches for a safe start and reports it, None when there is none."""
         now = self._clock.now()
         start_time = find_start_time(
-            planner, self._motion, self._motion.get_joint_angles(), now
+            planner,
+            self._motion,
+            self._motion.get_joint_angles(),
+            self._handle_angle,
+            now,
         )
         if start_time is None:
             self._warn(
@@ -296,7 +292,8 @@ class PuzzleMode:
                 " to search again, c to stop."
             )
         else:
-            self._info(f"Going down the rod in {start_time - now:.1f} s.")
+            remaining_time = start_time - self._clock.now()
+            self._info(f"Going down the rod in {remaining_time:.1f} s.")
         return start_time
 
     def _go_down(self, planner: RodPlanner, last_index: int) -> int:
@@ -339,28 +336,44 @@ class PuzzleMode:
         self._keyboard.discard_pending()
         return True
 
-    def _step(self, planner: RodPlanner, index: int) -> None:
+    def _step(
+        self, planner: RodPlanner, index: int, can_flip: bool = False
+    ) -> None:
         """Moves the hoop to a path point predicted for its arrival.
 
+        Args:
+            planner: Path of the hoop.
+            index: Path point to move to.
+            can_flip: True when a joint may change by more than
+                MAX_JOINT_STEP, for the move from home to the path.
+
         Raises:
-            NoJointConfigError: The point cannot be reached.
+            NoJointConfigError: No handle angle reaches the point, nothing
+                is sent.
             ValueError: The planner cannot give a pose for the point.
         """
         sent_time = self._clock.now()
-        # The arrival time depends on the target, one estimate is enough
-        # because the table hardly moves in the difference.
-        estimate = planner.get_hoop_pose(sent_time + MOVE_OVERHEAD, index)
-        lead_time = get_lead_time(self._motion.get_move_time(estimate))
-        self._motion.move_to_ik(
-            planner.get_hoop_pose(sent_time + lead_time, index)
+        step = plan_step(
+            planner,
+            self._motion,
+            index,
+            sent_time,
+            self._motion.get_joint_angles(),
+            handle_angle=self._handle_angle,
+            can_flip=can_flip,
         )
+        self._handle_angle = step.handle_angle
+        self._motion.move_to_ik(step.hoop_pose)
         while self._motion.is_in_motion():
             self._clock.sleep(MOTION_POLL_PERIOD)
         logger.info(
-            "Step to path point %d: expected %.3f s, took %.3f s.",
+            "Step to path point %d: expected %.3f s, took %.3f s, handle %.0f"
+            " deg, joints %s deg.",
             index,
-            lead_time,
+            step.arrival_time - sent_time,
             self._clock.now() - sent_time,
+            math.degrees(step.handle_angle),
+            [round(math.degrees(angle), 1) for angle in step.joint_angles],
         )
 
     def _info(self, message: str) -> None:

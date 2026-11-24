@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from hoop_guide.control import MOVE_OVERHEAD
-from hoop_guide.control import MOVE_TIME_FACTOR
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import SYNC_DISTANCE
@@ -44,7 +43,6 @@ ANGULAR_VELOCITY = 0.2  # [rad/s]
 MOVING_CHECKS = 15
 SYNC_HEIGHT = PLATE_HEIGHT + 0.2 + SYNC_DISTANCE
 BOTTOM_HEIGHT = PLATE_HEIGHT + STOP_HEIGHT
-FAKE_MOVE_TIME = 0.25  # what the fake robot reports for every move [s]
 ENTER_TIME = 8.0  # after the measurement of about 5 s [s]
 # A few steps down the rod, after the start EARLIEST_START after Enter [s].
 STOP_ON_ROD_TIME = ENTER_TIME + EARLIEST_START + 1.5
@@ -122,6 +120,9 @@ class FakeMotion:
         is_reachable: Rule on the hoop pose and the time of the move.
         is_reachable_in_search: Rule the start search sees, is_reachable
             when None.
+        flip_after: From this time points below LOW_HEIGHT need the fourth
+            joint turned by half a turn [s], None for never.
+        start_joint_angles: Joint angles before the first move [rad].
     """
 
     def __init__(
@@ -129,12 +130,17 @@ class FakeMotion:
         clock,
         is_reachable=lambda pose, time: True,
         is_reachable_in_search=None,
+        flip_after=None,
+        start_joint_angles=None,
     ):
         self._clock = clock
         self._is_reachable = is_reachable
         self._is_reachable_in_search = is_reachable_in_search or is_reachable
+        self._flip_after = flip_after
         self._remaining_checks = 0
-        self._joint_angles = JointConfig(np.zeros(6))
+        self._joint_angles = JointConfig(
+            np.zeros(6) if start_joint_angles is None else start_joint_angles
+        )
         self.moves = []
 
     @property
@@ -151,12 +157,13 @@ class FakeMotion:
     def choose_joint_config(self, hoop_pose, joint_angles):
         if not self._is_reachable_in_search(hoop_pose, self._clock.time):
             raise NoJointConfigError("No joint configuration.")
-        return JointConfig(np.r_[hoop_pose[:3, 3], 0.0, 0.0, 0.0])
-
-    def get_move_time(self, hoop_pose):
-        if not self._is_reachable(hoop_pose, self._clock.time):
-            raise NoJointConfigError("No joint configuration.")
-        return FAKE_MOVE_TIME
+        is_flipped = (
+            self._flip_after is not None
+            and self._clock.time > self._flip_after
+            and hoop_pose[2, 3] < LOW_HEIGHT
+        )
+        fourth_joint = math.pi if is_flipped else 0.0
+        return JointConfig(np.r_[hoop_pose[:3, 3], fourth_joint, 0.0, 0.0])
 
     def move_to_ik(self, hoop_pose):
         if not self._is_reachable(hoop_pose, self._clock.time):
@@ -235,6 +242,8 @@ class Run:
         motion_class=None,
         is_reachable=lambda pose, time: True,
         is_reachable_in_search=None,
+        flip_after=None,
+        start_joint_angles=None,
         has_camera=True,
         is_plate_visible=True,
         homography=IDENTITY,
@@ -242,7 +251,11 @@ class Run:
     ):
         self.clock = FakeClock()
         self.motion = (motion_class or FakeMotion)(
-            self.clock, is_reachable, is_reachable_in_search
+            self.clock,
+            is_reachable,
+            is_reachable_in_search,
+            flip_after,
+            start_joint_angles,
         )
         self.robot = FakeRobot()
         self.keyboard = FakeKeyboard(self.clock, timed_keys)
@@ -324,10 +337,9 @@ def test_moves_aim_at_the_plate_predicted_for_the_arrival():
         if pose[2, 3] == pytest.approx(SYNC_HEIGHT)
     ]
     for time, pose in sync_moves:
-        plate = plate_pose_at(
-            time + MOVE_TIME_FACTOR * FAKE_MOVE_TIME + MOVE_OVERHEAD
-        )
-        np.testing.assert_allclose(pose[:2, 3], (plate.x, plate.y), atol=1e-6)
+        # The fake joints are fast, the move itself takes almost no time.
+        plate = plate_pose_at(time + MOVE_OVERHEAD)
+        np.testing.assert_allclose(pose[:2, 3], (plate.x, plate.y), atol=1e-4)
 
 
 def test_hoop_goes_down_then_follows_the_bottom_then_goes_back_up():
@@ -466,6 +478,42 @@ def test_point_out_of_reach_only_in_reality_goes_back_out_and_home():
     assert min(heights) >= LOW_HEIGHT
     assert heights[-1] == pytest.approx(SYNC_HEIGHT)
     assert run.robot.home_count == 1
+
+
+def test_joint_flip_on_the_rod_is_not_sent_and_the_hoop_goes_back_out():
+    # The start search does not see the flip, it appears after the start.
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER)],
+        flip_after=ENTER_TIME + EARLIEST_START + 0.5,
+    )
+
+    assert "Joint 4 would turn by 180 deg" in run.reporter.warnings[0]
+    assert min(run.motion.heights()) >= LOW_HEIGHT
+    assert run.motion.heights()[-1] == pytest.approx(SYNC_HEIGHT)
+    assert run.robot.home_count == 1
+
+
+def test_move_from_home_to_the_sync_point_may_turn_a_joint_far():
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER)],
+        start_joint_angles=np.full(6, 3.0),
+    )
+
+    assert run.reporter.warnings == []
+    assert run.robot.home_count == 1
+
+
+def test_joint_angles_of_every_step_are_logged(caplog):
+    with caplog.at_level("INFO", logger="hoop_guide.puzzle_mode"):
+        complete_run()
+
+    step_messages = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("Step to path point")
+    ]
+    assert step_messages
+    assert all("joints [" in message for message in step_messages)
 
 
 def test_without_a_safe_start_the_hoop_stays_at_the_sync_point():

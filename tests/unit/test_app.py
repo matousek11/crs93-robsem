@@ -7,8 +7,8 @@ from hoop_guide.app import App
 from hoop_guide.cli import Config
 from hoop_guide.rods import Puzzle
 
-MODE_KEYS = {"1": Puzzle.A1, "2": Puzzle.A2, "3": Puzzle.B}
-HARDWARE_ACTIONS = {"4": "soft_home", "5": "release", "6": "reset_motors"}
+MODE_KEYS = {"1": Puzzle.A1, "2": Puzzle.A2, "3": Puzzle.B, "4": Puzzle.C}
+HARDWARE_ACTIONS = {"5": "soft_home", "6": "release", "7": "reset_motors"}
 
 
 class FakeRobot:
@@ -185,7 +185,7 @@ def test_ctrl_c_is_ignored_during_shutdown_and_restored_after(tmp_path):
 def test_failed_initialization_skips_menu_and_shuts_down(tmp_path):
     failures = {"initialize(should_home=True)": RuntimeError("no controller")}
 
-    log, _ = run_app(tmp_path, answers=["4"], failures=failures)
+    log, _ = run_app(tmp_path, answers=["5"], failures=failures)
 
     assert robot_calls(log) == ["initialize(should_home=True)", "shutdown"]
     assert messages(log, "error")[0].startswith("Initialization failed.")
@@ -200,7 +200,7 @@ def test_failed_shutdown_shows_error(tmp_path):
 
 
 def test_invalid_option_shows_warning_and_returns_to_menu(tmp_path):
-    log, _ = run_app(tmp_path, answers=["42", "4", "0"])
+    log, _ = run_app(tmp_path, answers=["42", "5", "0"])
 
     assert "Invalid option '42'." in messages(log, "warning")
     assert "soft_home" in robot_calls(log)
@@ -258,7 +258,7 @@ def test_hardware_action_is_blocked_on_virtual_robot(tmp_path, key):
 
 
 def test_release_asks_for_confirmation_first(tmp_path):
-    log, _ = run_app(tmp_path, answers=["5", "0"])
+    log, _ = run_app(tmp_path, answers=["6", "0"])
 
     confirms = [i for i, entry in enumerate(log) if entry[0] == "confirm"]
     assert confirms[-1] < log.index(("robot", "release"))
@@ -267,13 +267,13 @@ def test_release_asks_for_confirmation_first(tmp_path):
 def test_failed_hardware_action_shows_error_and_returns_to_menu(tmp_path):
     failures = {"soft_home": RuntimeError("motor error")}
 
-    log, _ = run_app(tmp_path, answers=["4", "6", "0"], failures=failures)
+    log, _ = run_app(tmp_path, answers=["5", "7", "0"], failures=failures)
 
     assert messages(log, "error")[0].startswith("Soft home failed.")
     assert "reset_motors" in robot_calls(log)
 
 
-EXTRA_ACTION_KEY = "7"
+EXTRA_ACTION_KEY = "8"
 
 
 def test_extra_action_is_offered_after_the_built_in_ones(tmp_path):

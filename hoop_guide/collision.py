@@ -8,13 +8,14 @@ import numpy as np
 from hoop_guide.models.hoop_mount import HOOP_INNER_RADIUS
 from hoop_guide.models.hoop_mount import HOOP_RING_WIDTH
 from hoop_guide.models.hoop_mount import HOOP_THICKNESS
+from hoop_guide.plate import PLATE_HEIGHT
 from hoop_guide.types import JointConfig
 from hoop_guide.types import Points3D
 from hoop_guide.types import Pose
 
-MIN_HEIGHT = 0.07
+MIN_HEIGHT = PLATE_HEIGHT
 """Nothing of the robot or the hoop may get below this height above the
-robot base frame origin, the plate top [m]."""
+robot base frame origin: the plate top [m]."""
 
 # TODO: measure in the lab.
 ARM_RADIUS = 0.04

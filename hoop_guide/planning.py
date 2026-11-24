@@ -1,6 +1,9 @@
 """Moves of the hoop to a target pose and the hoop path along the rod."""
 
+import dataclasses
 import math
+from collections.abc import Iterator
+from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -33,12 +36,66 @@ SYNC_DISTANCE = 0.10
 """Distance of the synchronization point from the free end of the rod, along
 the first segment of the rod [m]."""
 
+MAX_JOINT_STEP = math.radians(45.0)
+"""Largest change of one joint in one step. A larger one means the joint
+configuration flips and the arm would swing with the hoop on the rod."""
+
+HANDLE_ANGLE_STEP = math.radians(10.0)
+"""Spacing of the handle angles tried when the previous one does not go
+[rad]."""
+
 _MIN_HANDLE_LENGTH = 1e-9
 """Below this the direction to the robot base is along the hoop axis."""
 
 
 class NoJointConfigError(RuntimeError):
     """Raised when no joint configuration is left to reach a pose."""
+
+
+class Kinematics(Protocol):
+    """Joint configurations and speeds of the robot."""
+
+    @property
+    def joint_speeds(self) -> JointSpeeds:
+        """Speeds of the joints in a move [rad/s]."""
+
+    @property
+    def joint_limits(self) -> tuple[JointConfig, JointConfig]:
+        """Lowest and highest angle of every joint [rad]."""
+
+    def choose_joint_config(
+        self, hoop_pose: Pose, joint_angles: JointConfig
+    ) -> JointConfig:
+        """Returns the reaching configuration nearest to the joint angles.
+
+        Raises:
+            NoJointConfigError: The pose is out of reach or only beyond the
+                joint limits.
+        """
+
+
+class JointFlipError(RuntimeError):
+    """Raised when a step changes a joint by more than MAX_JOINT_STEP."""
+
+
+def check_joint_step(start: JointConfig, target: JointConfig) -> None:
+    """Checks that no joint changes by more than MAX_JOINT_STEP.
+
+    Args:
+        start: Joint angles before the step [rad].
+        target: Joint angles after the step [rad].
+
+    Raises:
+        JointFlipError: A joint changes by more, the message names it.
+    """
+    changes = np.abs(target - start)
+    joint_index = int(np.argmax(changes))
+    if float(changes[joint_index]) > MAX_JOINT_STEP:
+        raise JointFlipError(
+            f"Joint {joint_index + 1} would turn by"
+            f" {math.degrees(float(changes[joint_index])):.0f} deg in one"
+            " step."
+        )
 
 
 class Planning:
@@ -75,29 +132,6 @@ class Planning:
 
         # 5. move robot to new configurations
         self.robot.set_joint_angles(picked_config)
-
-    def get_move_time(self, hoop_pose: Pose) -> float:
-        """Returns how long move_to_ik to the pose takes at full joint speeds.
-
-        Uses the joint configuration move_to_ik picks. Speeding up and
-        slowing down are not included.
-
-        Args:
-            hoop_pose: Target pose of the hoop in the robot frame.
-
-        Returns:
-            Time of the move [s].
-
-        Raises:
-            NoJointConfigError: The pose is out of reach, or only beyond the
-                joint limits or below the table.
-        """
-        joint_angles = self.robot.get_joint_angles()
-        return control.get_move_time(
-            joint_angles,
-            self.choose_joint_config(hoop_pose, joint_angles),
-            self.robot.joint_speeds,
-        )
 
     @property
     def joint_speeds(self) -> JointSpeeds:
@@ -236,23 +270,38 @@ class RodPlanner:
         """
         return self._get_hoop_poses(target_time, start_index, self.point_count)
 
-    def get_hoop_pose(self, target_time: float, index: int) -> Pose:
+    def get_hoop_pose(
+        self, target_time: float, index: int, handle_angle: float = 0.0
+    ) -> Pose:
         """Returns the hoop pose of one path point, for a moment.
 
-        The same as update(target_time, index)[0], without computing the
-        rest of the path.
+        With handle_angle 0 the same as update(target_time, index)[0],
+        without computing the rest of the path.
+
+        Args:
+            target_time: time.monotonic at which the pose holds [s].
+            index: Path point, 0 is the synchronization point.
+            handle_angle: Turn of the handle about the rod from the direction
+                toward the robot base, counterclockwise looking against the
+                hoop z axis [rad].
 
         Raises:
             ValueError: As update.
         """
-        return self._get_hoop_poses(target_time, index, index + 1)[0]
+        return self._get_hoop_poses(
+            target_time, index, index + 1, handle_angle
+        )[0]
 
     def _get_hoop_poses(
-        self, target_time: float, start_index: int, stop_index: int
+        self,
+        target_time: float,
+        start_index: int,
+        stop_index: int,
+        handle_angle: float = 0.0,
     ) -> tuple[Pose, ...]:
         """Returns the hoop poses of the points start_index to stop_index - 1.
 
-        See update.
+        See update and get_hoop_pose.
         """
         if not 0 <= start_index < self.point_count:
             raise ValueError(
@@ -280,6 +329,9 @@ class RodPlanner:
                     "Handle cannot point toward the robot base at path point"
                     f" {start_index + offset}."
                 )
+            handle = math.cos(handle_angle) * handle + math.sin(
+                handle_angle
+            ) * np.cross(tangent, handle)
             hoop_pose = np.eye(4)
             hoop_pose[:3, 0] = handle
             hoop_pose[:3, 1] = np.cross(tangent, handle)
@@ -287,6 +339,151 @@ class RodPlanner:
             hoop_pose[:3, 3] = point
             hoop_poses.append(Pose(hoop_pose))
         return tuple(hoop_poses)
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class StepPlan:
+    """One step of the hoop to a path point, planned for its arrival.
+
+    Attributes:
+        arrival_time: time.monotonic when the robot arrives [s].
+        handle_angle: Handle angle of the step, see RodPlanner.get_hoop_pose
+            [rad].
+        hoop_pose: Pose of the hoop to send, in the robot frame.
+        joint_angles: Joint angles the robot reaches the pose with [rad].
+    """
+
+    arrival_time: float
+    handle_angle: float
+    hoop_pose: Pose
+    joint_angles: JointConfig
+
+
+def plan_step(  # noqa: PLR0913
+    planner: RodPlanner,
+    kinematics: Kinematics,
+    index: int,
+    sent_time: float,
+    joint_angles: JointConfig,
+    *,
+    handle_angle: float,
+    can_flip: bool = False,
+) -> StepPlan:
+    """Plans a step to a path point, sent now and aimed at the arrival.
+
+    How long the move takes depends on where it goes, so the target is first
+    estimated for MOVE_OVERHEAD ahead and then planned for the arrival. The
+    table hardly moves in the difference, one estimate is enough.
+
+    Args:
+        planner: Path of the hoop.
+        kinematics: Joint configurations and speeds of the robot.
+        index: Path point to move to.
+        sent_time: time.monotonic when the step is sent [s].
+        joint_angles: Joint angles before the step [rad].
+        handle_angle: Handle angle of the previous step [rad].
+        can_flip: True when a joint may change by more than MAX_JOINT_STEP,
+            for the move from home to the path.
+
+    Raises:
+        NoJointConfigError: No handle angle reaches the point.
+        ValueError: The planner cannot give a pose for the point.
+    """
+    _, estimated_angles = choose_handle_angle(
+        planner,
+        kinematics,
+        index,
+        sent_time + control.MOVE_OVERHEAD,
+        joint_angles,
+        previous_angle=handle_angle,
+        can_flip=can_flip,
+    )
+    move_time = control.get_move_time(
+        joint_angles, estimated_angles, kinematics.joint_speeds
+    )
+    arrival_time = sent_time + control.get_lead_time(move_time)
+    handle_angle, target_angles = choose_handle_angle(
+        planner,
+        kinematics,
+        index,
+        arrival_time,
+        joint_angles,
+        previous_angle=handle_angle,
+        can_flip=can_flip,
+    )
+    return StepPlan(
+        arrival_time=arrival_time,
+        handle_angle=handle_angle,
+        hoop_pose=planner.get_hoop_pose(arrival_time, index, handle_angle),
+        joint_angles=target_angles,
+    )
+
+
+def choose_handle_angle(  # noqa: PLR0913
+    planner: RodPlanner,
+    kinematics: Kinematics,
+    index: int,
+    time: float,
+    joint_angles: JointConfig,
+    *,
+    previous_angle: float,
+    can_flip: bool = False,
+) -> tuple[float, JointConfig]:
+    """Returns the handle angle nearest to the previous one that goes.
+
+    The previous angle is tried first, then the angles HANDLE_ANGLE_STEP,
+    twice that and so on away from it, on both sides. An angle goes when a
+    joint configuration within the limits and above the table reaches the
+    pose and no joint changes by more than MAX_JOINT_STEP from joint_angles.
+
+    Args:
+        planner: Path of the hoop.
+        kinematics: Joint configurations of the robot.
+        index: Path point.
+        time: time.monotonic of the pose [s].
+        joint_angles: Joint angles the robot moves from [rad].
+        previous_angle: Handle angle of the previous step [rad].
+        can_flip: True when the joints may change by more than
+            MAX_JOINT_STEP.
+
+    Returns:
+        The handle angle, between -pi and pi [rad], and the joint angles for
+        it [rad].
+
+    Raises:
+        NoJointConfigError: No handle angle goes, the message gives the
+            reason of the last one tried.
+        ValueError: The planner cannot give a pose for the point.
+    """
+    last_error: Exception | None = None
+    for handle_angle in _nearest_angles_first(previous_angle):
+        hoop_pose = planner.get_hoop_pose(time, index, handle_angle)
+        try:
+            target_angles = kinematics.choose_joint_config(
+                hoop_pose, joint_angles
+            )
+            if not can_flip:
+                check_joint_step(joint_angles, target_angles)
+        except (NoJointConfigError, JointFlipError) as error:
+            last_error = error
+            continue
+        return handle_angle, target_angles
+    raise NoJointConfigError(
+        f"No handle angle reaches path point {index}: {last_error}"
+    )
+
+
+def _nearest_angles_first(previous_angle: float) -> Iterator[float]:
+    """Yields all handle angles, nearest to previous_angle first [rad]."""
+    half_turn_steps = round(math.pi / HANDLE_ANGLE_STEP)
+    yield math.remainder(previous_angle, 2 * math.pi)
+    for step_count in range(1, half_turn_steps):
+        for sign in (1, -1):
+            yield math.remainder(
+                previous_angle + sign * step_count * HANDLE_ANGLE_STEP,
+                2 * math.pi,
+            )
+    yield math.remainder(previous_angle + math.pi, 2 * math.pi)
 
 
 def _average_neighbours(tangents: PlateDirections3D) -> PlateDirections3D:

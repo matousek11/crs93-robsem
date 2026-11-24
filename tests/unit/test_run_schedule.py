@@ -81,7 +81,7 @@ def planner_with_plate_at(angle):
 def search(planner, kinematics, now=0.0):
     sync_pose = planner.update(now, 0)[0]
     joint_angles = JointConfig(np.r_[sync_pose[:3, 3], 0.0, 0.0, 0.0])
-    return find_start_time(planner, kinematics, joint_angles, now)
+    return find_start_time(planner, kinematics, joint_angles, 0.0, now)
 
 
 def is_far_or_high(pose):
@@ -152,3 +152,15 @@ def test_flip_of_the_joint_configuration_gives_no_start():
     kinematics = FakeKinematics(flip_below=LOW)
 
     assert search(planner_with_plate_at(0.0), kinematics) is None
+
+
+def test_start_is_found_by_turning_the_handle_away_from_the_robot():
+    # Low points are reachable only with the handle not toward the robot.
+    def is_reachable(pose):
+        return pose[2, 3] >= LOW or pose[0, 0] > -0.5
+
+    start_time = search(
+        planner_with_plate_at(0.0), FakeKinematics(is_reachable)
+    )
+
+    assert start_time == pytest.approx(EARLIEST_START)
