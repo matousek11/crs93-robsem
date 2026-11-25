@@ -6,8 +6,9 @@ found time and plans every step again from the real time and joint angles,
 so small differences from the simulation do not add up.
 
 Of the starts that go through, the one that keeps the joints farthest from
-their limits is chosen. Both failures seen in the lab on 2026-11-24 were
-the elbow joint reaching its limit, a run along a limit fails with a small
+their limits and the wrist farthest from its singularity is chosen. The
+failures seen in the lab on 2026-11-24 were the elbow joint reaching its
+limit and the wrist getting straight, a run along either fails with a small
 error of the prediction or of the step times.
 """
 
@@ -18,7 +19,9 @@ import numpy as np
 from hoop_guide.planning import Kinematics
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
+from hoop_guide.planning import check_wrist_bend
 from hoop_guide.planning import choose_handle_angle
+from hoop_guide.planning import get_wrist_margin
 from hoop_guide.planning import plan_step
 from hoop_guide.types import JointConfig
 
@@ -71,9 +74,10 @@ def find_start_time(
     time it is reached.
 
     The margin of a run is the smallest distance of a joint from its limit
-    on the rod, waiting at the synchronization point does not count: a
-    failure there only stops the run. The earliest start within
-    JOINT_MARGIN_TOLERANCE of the largest margin wins.
+    or of the wrist from its singularity on the rod. Waiting at the
+    synchronization point does not count, a failure there only stops the
+    run. The earliest start within JOINT_MARGIN_TOLERANCE of the largest
+    margin wins.
 
     Args:
         planner: Path of the hoop.
@@ -128,7 +132,7 @@ def _simulate_run(
     """Simulates the run from start_time.
 
     Returns:
-        The smallest distance of a joint from its limit in the run [rad],
+        The smallest joint margin in the run, see _get_joint_margin [rad],
         None when a step does not go.
     """
     last_index = planner.point_count - 1
@@ -170,8 +174,8 @@ def _simulate_step(  # noqa: PLR0913, PLR0917
 
     Returns:
         When the next step is sent [s], the joint angles then [rad], the
-        handle angle then [rad] and the smallest distance of a joint from
-        its limit around the arrival [rad].
+        handle angle then [rad] and the smallest joint margin around the
+        arrival, see _get_joint_margin [rad].
 
     Raises:
         NoJointConfigError: The point is not reachable around the arrival.
@@ -185,7 +189,7 @@ def _simulate_step(  # noqa: PLR0913, PLR0917
         joint_angles,
         handle_angle=handle_angle,
     )
-    limit_margin = _get_limit_margin(step.joint_angles, kinematics.joint_limits)
+    joint_margin = _get_joint_margin(step.joint_angles, kinematics.joint_limits)
     for time_offset in (-TIME_MARGIN, TIME_MARGIN):
         nearby_pose = planner.get_hoop_pose(
             step.arrival_time + time_offset, index, step.handle_angle
@@ -193,23 +197,29 @@ def _simulate_step(  # noqa: PLR0913, PLR0917
         nearby_angles = kinematics.choose_joint_config(
             nearby_pose, joint_angles
         )
-        limit_margin = min(
-            limit_margin,
-            _get_limit_margin(nearby_angles, kinematics.joint_limits),
+        check_wrist_bend(nearby_angles)
+        joint_margin = min(
+            joint_margin,
+            _get_joint_margin(nearby_angles, kinematics.joint_limits),
         )
     return (
         step.arrival_time + READY_FLAG_DELAY,
         step.joint_angles,
         step.handle_angle,
-        limit_margin,
+        joint_margin,
     )
 
 
-def _get_limit_margin(
+def _get_joint_margin(
     joint_angles: JointConfig, joint_limits: tuple[JointConfig, JointConfig]
 ) -> float:
-    """Returns the smallest distance of a joint from its limit [rad]."""
+    """Returns how far the joints are from where they must not get [rad].
+
+    The smaller of the smallest distance of a joint from its limit and of
+    the distance of the wrist from its singularity, see get_wrist_margin.
+    """
     lowest, highest = joint_limits
-    return float(
+    limit_margin = float(
         np.min(np.minimum(joint_angles - lowest, highest - joint_angles))
     )
+    return min(limit_margin, get_wrist_margin(joint_angles))

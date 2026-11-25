@@ -11,13 +11,17 @@ from hoop_guide.estimation import TableMotion
 from hoop_guide.models.hoop_mount import FLANGE_TO_HOOP
 from hoop_guide.planning import HANDLE_ANGLE_STEP
 from hoop_guide.planning import MAX_JOINT_STEP
+from hoop_guide.planning import MIN_WRIST_BEND
 from hoop_guide.planning import PATH_STEP
 from hoop_guide.planning import SYNC_DISTANCE
+from hoop_guide.planning import WRIST_BEND_JOINT
 from hoop_guide.planning import JointFlipError
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import Planning
 from hoop_guide.planning import RodPlanner
+from hoop_guide.planning import WristSingularityError
 from hoop_guide.planning import check_joint_step
+from hoop_guide.planning import check_wrist_bend
 from hoop_guide.planning import choose_handle_angle
 from hoop_guide.planning import plan_step
 from hoop_guide.plate import PlatePose
@@ -470,10 +474,14 @@ class FakeKinematics:
 
     Args:
         is_reachable: Rule on the hoop pose.
+        wrist_bend: Angle of the wrist bend joint for a hoop pose [rad].
     """
 
-    def __init__(self, is_reachable=lambda pose: True):
+    def __init__(
+        self, is_reachable=lambda pose: True, wrist_bend=lambda pose: 1.0
+    ):
         self._is_reachable = is_reachable
+        self._wrist_bend = wrist_bend
         self.tried_handles = []
 
     @property
@@ -488,12 +496,14 @@ class FakeKinematics:
         self.tried_handles.append(handle(hoop_pose).copy())
         if not self._is_reachable(hoop_pose):
             raise NoJointConfigError("No joint configuration.")
-        return JointConfig(np.r_[handle(hoop_pose), 0.0, 0.0, 0.0])
+        return JointConfig(
+            np.r_[handle(hoop_pose), 0.0, self._wrist_bend(hoop_pose), 0.0]
+        )
 
 
 def angles_toward_base():
     """Joint angles of FakeKinematics with the handle toward the base."""
-    return JointConfig(np.r_[TOWARD_BASE, 0.0, 0.0, 0.0])
+    return JointConfig(np.r_[TOWARD_BASE, 0.0, 1.0, 0.0])
 
 
 def test_handle_angle_turns_the_handle_about_the_rod():
@@ -611,3 +621,46 @@ def test_step_is_aimed_at_the_plate_when_the_robot_arrives():
         step.hoop_pose,
         planner.get_hoop_pose(step.arrival_time, 0, step.handle_angle),
     )
+
+
+# wrist singularity
+
+
+def joint_angles_with_wrist_bend(wrist_bend):
+    joint_angles = np.full(6, 0.5)
+    joint_angles[WRIST_BEND_JOINT] = wrist_bend
+    return JointConfig(joint_angles)
+
+
+@pytest.mark.parametrize("sign", [1, -1], ids=["positive", "negative"])
+def test_wrist_bent_enough_passes(sign):
+    check_wrist_bend(joint_angles_with_wrist_bend(sign * MIN_WRIST_BEND * 1.1))
+
+
+@pytest.mark.parametrize("sign", [1, -1], ids=["positive", "negative"])
+def test_wrist_too_straight_raises_with_the_joint(sign):
+    joint_angles = joint_angles_with_wrist_bend(sign * MIN_WRIST_BEND * 0.5)
+
+    with pytest.raises(WristSingularityError, match="Joint 5"):
+        check_wrist_bend(joint_angles)
+
+
+def test_handle_angle_with_the_wrist_near_its_singularity_is_skipped():
+    # The wrist is straight with the handle toward the robot.
+    def wrist_bend(pose):
+        is_toward_base = handle(pose) @ TOWARD_BASE > math.cos(
+            0.5 * HANDLE_ANGLE_STEP
+        )
+        return 0.0 if is_toward_base else 1.0
+
+    angle, joint_angles = choose_handle_angle(
+        make_planner(),
+        FakeKinematics(wrist_bend=wrist_bend),
+        3,
+        0.0,
+        angles_toward_base(),
+        previous_angle=0.0,
+    )
+
+    assert abs(angle) == pytest.approx(HANDLE_ANGLE_STEP)
+    assert joint_angles[WRIST_BEND_JOINT] == pytest.approx(1.0)

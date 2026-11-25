@@ -44,6 +44,19 @@ HANDLE_ANGLE_STEP = math.radians(10.0)
 """Spacing of the handle angles tried when the previous one does not go
 [rad]."""
 
+WRIST_BEND_JOINT = 4
+"""Index of the joint that bends the wrist, joint 5 of the CRS robots."""
+
+# Seen in the lab on 2026-11-24 on rod B: joint 5 went from -65 to -20 deg,
+# joints 4 and 6 turned 15 deg a step, then no handle angle went and on the
+# way back joint 4 ran to the end of its range with the hoop on the rod.
+MIN_WRIST_BEND = math.radians(10.0)
+"""Smallest angle of the wrist bend joint from zero [rad].
+
+At zero the axes of joints 4 and 6 line up, the wrist singularity. Near it
+those two joints turn far for a small move of the hoop.
+"""
+
 _MIN_HANDLE_LENGTH = 1e-9
 """Below this the direction to the robot base is along the hoop axis."""
 
@@ -76,6 +89,34 @@ class Kinematics(Protocol):
 
 class JointFlipError(RuntimeError):
     """Raised when a step changes a joint by more than MAX_JOINT_STEP."""
+
+
+class WristSingularityError(NoJointConfigError):
+    """Raised when the wrist bend joint is closer than MIN_WRIST_BEND to 0."""
+
+
+def get_wrist_margin(joint_angles: JointConfig) -> float:
+    """Returns how far the wrist bend is from being too straight [rad].
+
+    The angle of the wrist bend joint from zero minus MIN_WRIST_BEND,
+    negative when the wrist is too near its singularity.
+    """
+    return abs(float(joint_angles[WRIST_BEND_JOINT])) - MIN_WRIST_BEND
+
+
+def check_wrist_bend(joint_angles: JointConfig) -> None:
+    """Checks that the wrist is not near its singularity.
+
+    Raises:
+        WristSingularityError: The wrist bend joint is closer than
+            MIN_WRIST_BEND to zero.
+    """
+    if get_wrist_margin(joint_angles) < 0.0:
+        bend = math.degrees(float(joint_angles[WRIST_BEND_JOINT]))
+        raise WristSingularityError(
+            f"Joint {WRIST_BEND_JOINT + 1} would be at {bend:.0f} deg, too"
+            " near the wrist singularity."
+        )
 
 
 def check_joint_step(start: JointConfig, target: JointConfig) -> None:
@@ -434,7 +475,8 @@ def choose_handle_angle(  # noqa: PLR0913
     The previous angle is tried first, then the angles HANDLE_ANGLE_STEP,
     twice that and so on away from it, on both sides. An angle goes when a
     joint configuration within the limits and above the table reaches the
-    pose and no joint changes by more than MAX_JOINT_STEP from joint_angles.
+    pose, the wrist is not near its singularity (MIN_WRIST_BEND) and no
+    joint changes by more than MAX_JOINT_STEP from joint_angles.
 
     Args:
         planner: Path of the hoop.
@@ -462,6 +504,7 @@ def choose_handle_angle(  # noqa: PLR0913
             target_angles = kinematics.choose_joint_config(
                 hoop_pose, joint_angles
             )
+            check_wrist_bend(target_angles)
             if not can_flip:
                 check_joint_step(joint_angles, target_angles)
         except (NoJointConfigError, JointFlipError) as error:

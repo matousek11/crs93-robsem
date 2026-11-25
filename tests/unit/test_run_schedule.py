@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 from hoop_guide.estimation import TableMotion
+from hoop_guide.planning import MIN_WRIST_BEND
+from hoop_guide.planning import WRIST_BEND_JOINT
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import PlatePose
@@ -30,6 +32,7 @@ class FakeKinematics:
         flip_below: Below this height a joint turns by half a turn [m].
         lowest_x: Lower limit of the joint that is the hoop x [m], the
             joints have no other limits.
+        wrist_bend: Angle of the wrist bend joint for a hoop pose [rad].
     """
 
     def __init__(
@@ -37,8 +40,10 @@ class FakeKinematics:
         is_reachable=lambda pose: True,
         flip_below=None,
         lowest_x=-math.inf,
+        wrist_bend=lambda pose: 1.0,
     ):
         self._is_reachable = is_reachable
+        self._wrist_bend = wrist_bend
         self._flip_below = flip_below
         self._lowest_x = lowest_x
 
@@ -57,6 +62,7 @@ class FakeKinematics:
             raise NoJointConfigError("No joint configuration.")
         config = np.zeros(6)
         config[:3] = hoop_pose[:3, 3]
+        config[WRIST_BEND_JOINT] = self._wrist_bend(hoop_pose)
         if self._flip_below is not None and hoop_pose[2, 3] < self._flip_below:
             config[3] = math.pi
         return JointConfig(config)
@@ -80,7 +86,7 @@ def planner_with_plate_at(angle):
 
 def search(planner, kinematics, now=0.0):
     sync_pose = planner.update(now, 0)[0]
-    joint_angles = JointConfig(np.r_[sync_pose[:3, 3], 0.0, 0.0, 0.0])
+    joint_angles = JointConfig(np.r_[sync_pose[:3, 3], 0.0, 1.0, 0.0])
     return find_start_time(planner, kinematics, joint_angles, 0.0, now)
 
 
@@ -164,3 +170,25 @@ def test_start_is_found_by_turning_the_handle_away_from_the_robot():
     )
 
     assert start_time == pytest.approx(EARLIEST_START)
+
+
+def test_wrist_near_its_singularity_on_the_rod_gives_no_start():
+    def wrist_bend(pose):
+        return MIN_WRIST_BEND / 2 if pose[2, 3] < LOW else 1.0
+
+    kinematics = FakeKinematics(wrist_bend=wrist_bend)
+
+    assert search(planner_with_plate_at(0.0), kinematics) is None
+
+
+def test_start_keeps_the_wrist_farthest_from_its_singularity():
+    # The wrist is the straighter the nearer the plate is to the robot.
+    def wrist_bend(pose):
+        return MIN_WRIST_BEND + 0.05 + 2.0 * (pose[0, 3] - 0.33)
+
+    planner = planner_with_plate_at(math.pi / 2)
+
+    start_time = search(planner, FakeKinematics(wrist_bend=wrist_bend))
+
+    assert start_time is not None
+    assert start_time > 5.0
