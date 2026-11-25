@@ -30,7 +30,7 @@ from hoop_guide.types import JointConfig
 BOTTOM_WAIT = 1.0
 """How long the hoop follows the last path point before going back [s]."""
 
-SEARCH_WINDOW = 20.0
+SEARCH_WINDOW = 30.0
 """How far after now a start is searched for [s]."""
 
 EARLIEST_START = 3.0

@@ -488,14 +488,17 @@ class PuzzleMode:
         frame = self._frames.latest if self._frames is not None else None
         if frame is None or self._homography is None:
             return "no camera frame"
+        marker_ids = sorted(marker.marker_id for marker in frame.markers)
+        markers = ", ".join(str(marker_id) for marker_id in marker_ids)
         measured = estimate_plate_pose(frame.markers, self._homography)
         if measured is None or self._table_motion is None:
-            return "plate not seen"
+            return f"plate not seen (markers: {markers or 'none'})"
         predicted = self._table_motion.predict(frame.timestamp - CAMERA_LATENCY)
         distance, heading = get_plate_error(measured, predicted)
         return (
             f"plate {distance * _MILLIMETERS_PER_METER:.1f} mm and"
-            f" {math.degrees(heading):+.1f} deg off the prediction"
+            f" {math.degrees(heading):+.1f} deg off the prediction (markers:"
+            f" {markers})"
         )
 
     def _info(self, message: str) -> None:
