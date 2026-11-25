@@ -20,14 +20,20 @@ from hoop_guide.types import JointSpeeds
 # move time + 0.24 s. With the factor 1.3 the start search simulated the
 # run 8.3 s slower than it went, so it checked the plate 105 deg away from
 # where it was, and the wrist flipped near the end of the run.
-MOVE_OVERHEAD = 0.25
+# Runs from 21:51 to 22:12 that day, puzzles A2 and B, 657 steps with a move
+# time up to 1.2 s: real time = 1.18 * move time + 0.36 s, residual sd
+# 0.10 s. The overhead grew from 0.24 s with the choice of the handle angle,
+# which is computed before every step is sent. The model of 1.0 and 0.25 s
+# was 0.13 s short per step, about 5 s over a run. A square root term for
+# speeding up fits only 7 ms better, so the model stays linear.
+MOVE_OVERHEAD = 0.36
 """Time every step takes on top of its move, however small [s].
 
-Communication with the controller, waiting for its ready flag and
-settling.
+Planning the step, communication with the controller, waiting for its ready
+flag and settling.
 """
 
-MOVE_TIME_FACTOR = 1.0
+MOVE_TIME_FACTOR = 1.18
 """How many times longer a move takes than at full joint speeds.
 
 The joints speed up and slow down, see MOVE_OVERHEAD for the measurement.

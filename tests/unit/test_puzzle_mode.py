@@ -163,13 +163,14 @@ class FakeMotion:
             and hoop_pose[2, 3] < LOW_HEIGHT
         )
         fourth_joint = math.pi if is_flipped else 0.0
-        return JointConfig(np.r_[hoop_pose[:3, 3], fourth_joint, 0.0, 0.0])
+        # The fifth joint is bent, zero would be the wrist singularity.
+        return JointConfig(np.r_[hoop_pose[:3, 3], fourth_joint, 1.0, 0.0])
 
     def move_to_ik(self, hoop_pose):
         if not self._is_reachable(hoop_pose, self._clock.time):
             raise NoJointConfigError("No joint configuration.")
         self.moves.append((self._clock.time, hoop_pose.copy()))
-        self._joint_angles = JointConfig(np.r_[hoop_pose[:3, 3], 0.0, 0.0, 0.0])
+        self._joint_angles = JointConfig(np.r_[hoop_pose[:3, 3], 0.0, 1.0, 0.0])
         self._remaining_checks = MOVING_CHECKS
 
     def is_in_motion(self):
