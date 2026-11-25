@@ -7,7 +7,6 @@ import pytest
 from hoop_guide.control import MOVE_OVERHEAD
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
-from hoop_guide.planning import AIM_AHEAD
 from hoop_guide.planning import SYNC_DISTANCE
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
@@ -46,9 +45,7 @@ ANGULAR_VELOCITY = 0.2  # [rad/s]
 MOVING_CHECKS = 15
 SYNC_HEIGHT = PLATE_HEIGHT + 0.2 + SYNC_DISTANCE
 BOTTOM_HEIGHT = PLATE_HEIGHT + STOP_HEIGHT
-# One turn of the table after 8 s, so the plate is where the tests expect
-# it and the measurement of PLATE_SAMPLE_COUNT frames is over [s].
-ENTER_TIME = 8.0 + 2 * math.pi / ANGULAR_VELOCITY
+ENTER_TIME = 8.0  # after the measurement of about 5 s [s]
 # The first search ends at once on the fake clock, but the earliest start is
 # where the expected search time puts it.
 FIRST_START_DELAY = SEARCH_TIME_MARGIN * INITIAL_SEARCH_TIME  # [s]
@@ -381,7 +378,7 @@ def test_hoop_follows_the_sync_point_until_enter():
     assert before_enter == pytest.approx([SYNC_HEIGHT] * len(before_enter))
 
 
-def test_moves_aim_at_the_plate_predicted_a_bit_after_the_arrival():
+def test_moves_aim_at_the_plate_predicted_for_the_arrival():
     run = complete_run()
 
     sync_moves = [
@@ -391,7 +388,7 @@ def test_moves_aim_at_the_plate_predicted_a_bit_after_the_arrival():
     ]
     for time, pose in sync_moves:
         # The fake joints are fast, the move itself takes almost no time.
-        plate = plate_pose_at(time + MOVE_OVERHEAD + AIM_AHEAD)
+        plate = plate_pose_at(time + MOVE_OVERHEAD)
         np.testing.assert_allclose(pose[:2, 3], (plate.x, plate.y), atol=1e-4)
 
 
@@ -635,20 +632,6 @@ def test_tilted_hoop_is_logged_with_its_tilt(caplog):
     assert any(
         "tilt 10 deg toward" in record.getMessage() for record in caplog.records
     )
-
-
-def test_run_goes_down_exactly_at_the_simulated_start(caplog):
-    with caplog.at_level("INFO", logger="hoop_guide.puzzle_mode"):
-        complete_run()
-
-    first_check = next(
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("Check down at path point 1")
-    )
-    match = re.search(r"sent ([+-][\d.]+) s against", first_check)
-    assert match is not None
-    assert float(match.group(1)) == pytest.approx(0.0, abs=0.01)
 
 
 def test_start_passed_during_a_long_search_does_not_go_down():

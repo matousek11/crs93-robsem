@@ -63,20 +63,20 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 ## Puzzle mode
 
 1. Checks that the camera and a saved homography are there, otherwise nothing moves. The height of the plate is `PLATE_HEIGHT` in `hoop_guide/plate.py`.
-2. Measures the table motion from the first 130 frames with the plate, about 30 s right at the start. A shorter measurement gave the angular velocity a few percent off, which made the plate up to 14° off its prediction at the end of a run. The arm must not hide the markers. When the frames are not collected within 45 s the mode ends.
+2. Measures the table motion from the first 50 frames with the plate, right at the start. The arm must not hide the markers. Without the plate for 15 s the mode ends.
 3. Moves the hoop to the synchronization point, 10 cm above the free end of the rod, and follows the rotation there.
 4. Enter simulates the whole run down the rod and back for starts in the next 30 s and picks the one that keeps the joints farthest from their limits. Starts are tried only from 1.5 times the time the previous search took (10 s before the first search), so the search ends before them. The hoop follows the synchronization point until the start. Without such a start, or when the search took longer and the start has passed, a warning is shown and Enter searches again.
 5. At the start the hoop goes down the rod point by point, every step planned again from the real time and joint angles.
 6. At 4 cm above the plate the hoop follows the rotation for 1 s.
 7. Goes back up the rod to the synchronization point and then home.
 
-Every step is aimed where the rod will be shortly after the robot arrives: the time of the move at the joint speeds of `ctu_crs`, times `MOVE_TIME_FACTOR` for speeding up and slowing down, plus `MOVE_OVERHEAD`, plus `AIM_AHEAD` (0.25 s). The hoop stands between two arrivals while the rod moves on, so it arrives slightly ahead of the rod and is slightly behind it when the next step arrives. The next step is sent when the robot stands still. The run leaves the synchronization point exactly at the simulated start, a step that would end after the start is not sent. The log has the expected and the real time, the handle angle and the joint angles of every step.
+Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs`, times `MOVE_TIME_FACTOR` for speeding up and slowing down, plus `MOVE_OVERHEAD`. The next step is sent when the robot stands still. The log has the expected and the real time, the handle angle and the joint angles of every step.
 
 To compare the simulation with the real run, the log also has:
 
 - `Simulated step ...` for every step of the chosen run: when it is sent and arrives, counted from the start, its handle angle and joint angles. `Simulated run: ...` sums it up with the joint margin and how long the search took.
 - `Check ...` after every step on the rod:
-  - how far the hoop center, from the measured joint angles, is from the predicted rod axis, and how much of that is ahead of the rod in the direction it moves (negative is behind). With `AIM_AHEAD` a few millimeters ahead are expected,
+  - how far the hoop center, from the measured joint angles, is from the predicted rod axis, and how much of that is ahead of the rod in the direction it moves (negative is behind),
   - how much later (+) or earlier (−) the step was sent than in the simulation,
   - how far the plate seen by the camera is from its prediction, in millimeters and degrees, and which markers the camera sees.
 
