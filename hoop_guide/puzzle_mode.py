@@ -7,6 +7,7 @@ from types import TracebackType
 from typing import Protocol
 from typing import Self
 
+from hoop_guide.control import MOVE_OVERHEAD
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
 from hoop_guide.planning import HoopTurn
@@ -35,8 +36,12 @@ from hoop_guide.vision import Frame
 logger = logging.getLogger(__name__)
 
 
-MEASUREMENT_TIMEOUT = 15.0
-"""Longest wait for the frames the table motion is measured from [s]."""
+MEASUREMENT_TIMEOUT = 45.0
+"""Longest wait for the frames the table motion is measured from [s].
+
+PLATE_SAMPLE_COUNT frames take about 30 s, the rest is for frames where
+the markers are hidden.
+"""
 
 FRAME_POLL_PERIOD = 0.02
 """Time between two looks for a new camera frame [s]."""
@@ -207,6 +212,7 @@ class PuzzleMode:
         self._clock: Clock = clock if clock is not None else SystemClock()
         self._hoop_turn = HoopTurn()
         self._expected_search_time = INITIAL_SEARCH_TIME
+        self._last_step_time = MOVE_OVERHEAD
         self._table_motion: TableMotion | None = None
         self._planned_sent_times: dict[tuple[RunPhase, int], float] = {}
 
@@ -284,7 +290,10 @@ class PuzzleMode:
         """Follows the synchronization point until the start, False if stopped.
 
         Enter searches for a start whose whole run goes through, see
-        find_run_schedule. The hoop keeps following the point until then.
+        find_run_schedule. The hoop keeps following the point until then. A
+        step that would end after the start is not sent, the hoop waits for
+        the start instead: in the lab on 2026-11-25 the last step made the
+        run start 0.28 s after the simulated run.
         """
         self._info("Moving to the synchronization point.")
         try:
@@ -294,15 +303,20 @@ class PuzzleMode:
                 " c to stop."
             )
             start_time: float | None = None
-            while start_time is None or self._clock.now() < start_time:
+            while True:
                 key = self._keyboard.poll_key()
                 if key is Key.STOP:
                     self._info("Stopped.")
                     return False
                 if key is Key.ENTER and start_time is None:
                     start_time = self._find_start_time(planner)
+                if (
+                    start_time is not None
+                    and self._clock.now() + self._last_step_time > start_time
+                ):
+                    self._clock.sleep(max(0.0, start_time - self._clock.now()))
+                    return True
                 self._step(planner, _SYNC_INDEX)
-            return True
         except (NoJointConfigError, ValueError) as error:
             self._warn(f"Synchronization point is out of reach: {error}")
             return False
@@ -453,6 +467,7 @@ class PuzzleMode:
         self._motion.move_to_ik(step.hoop_pose)
         while self._motion.is_in_motion():
             self._clock.sleep(MOTION_POLL_PERIOD)
+        self._last_step_time = self._clock.now() - sent_time
         logger.info(
             "Step to path point %d: expected %.3f s, took %.3f s, %s, joints"
             " %s deg.",

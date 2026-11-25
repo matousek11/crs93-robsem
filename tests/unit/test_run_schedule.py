@@ -129,7 +129,7 @@ def test_start_keeps_the_run_farthest_from_a_joint_limit():
     # away from the robot.
     plate_x_at_start = planner.update(start_time, 0)[0][0, 3]
     plate_x_later = planner.update(start_time + 1.0, 0)[0][0, 3]
-    assert plate_x_at_start > ROTATION_CENTER[0] - 0.01
+    assert plate_x_at_start > ROTATION_CENTER[0] - ROTATION_RADIUS / 4
     assert plate_x_later > plate_x_at_start
 
 

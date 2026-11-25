@@ -11,6 +11,7 @@ from hoop_guide.control import get_lead_time
 from hoop_guide.control import get_move_time
 from hoop_guide.estimation import TableMotion
 from hoop_guide.models.hoop_mount import FLANGE_TO_HOOP
+from hoop_guide.planning import AIM_AHEAD
 from hoop_guide.planning import ARRIVAL_TOLERANCE
 from hoop_guide.planning import HANDLE_ANGLE_STEP
 from hoop_guide.planning import MAX_JOINT_STEP
@@ -620,7 +621,7 @@ def test_no_handle_angle_that_goes_raises_with_the_last_reason():
         )
 
 
-def test_step_is_aimed_at_the_plate_when_the_robot_arrives():
+def test_step_is_aimed_at_the_plate_a_bit_after_the_robot_arrives():
     planner = make_planner(table_motion=TURNING_TABLE)
 
     step = plan_step(
@@ -636,7 +637,7 @@ def test_step_is_aimed_at_the_plate_when_the_robot_arrives():
     assert step.arrival_time == pytest.approx(5.0 + MOVE_OVERHEAD, abs=1e-3)
     np.testing.assert_allclose(
         step.hoop_pose,
-        planner.get_hoop_pose(step.arrival_time, 0, step.hoop_turn),
+        planner.get_hoop_pose(step.arrival_time + AIM_AHEAD, 0, step.hoop_turn),
     )
 
 
@@ -741,7 +742,7 @@ def test_step_whose_arrival_does_not_settle_uses_the_last_estimate():
     np.testing.assert_allclose(
         step.hoop_pose,
         make_planner(table_motion=TURNING_TABLE).get_hoop_pose(
-            step.arrival_time, 1, step.hoop_turn
+            step.arrival_time + AIM_AHEAD, 1, step.hoop_turn
         ),
     )
 

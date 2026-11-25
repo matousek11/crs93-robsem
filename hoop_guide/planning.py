@@ -79,6 +79,17 @@ ARRIVAL_TOLERANCE = 0.02
 MAX_ARRIVAL_ESTIMATES = 4
 """Most estimates of the arrival of one step, the last one is used."""
 
+# In the lab on 2026-11-25 the hoop was within 1 mm of the rod when it
+# arrived, but then stood until the next step arrived 0.5 to 0.8 s later.
+# The rod of B moved about 13 mm meanwhile and hit the hoop from behind.
+AIM_AHEAD = 0.25
+"""How far after the arrival the pose of a step is taken [s].
+
+The hoop stands between two arrivals while the rod moves on. Aiming about
+half that time ahead puts the hoop slightly ahead of the rod when it
+arrives and slightly behind when the next step arrives.
+"""
+
 _MIN_HANDLE_LENGTH = 1e-9
 """Below this the direction to the robot base is along the hoop axis."""
 
@@ -443,7 +454,8 @@ class StepPlan:
     Attributes:
         arrival_time: time.monotonic when the robot arrives [s].
         hoop_turn: How the hoop is turned in the step, see HoopTurn.
-        hoop_pose: Pose of the hoop to send, in the robot frame.
+        hoop_pose: Pose of the hoop to send, in the robot frame, where the
+            rod is AIM_AHEAD after the arrival.
         joint_angles: Joint angles the robot reaches the pose with [rad].
     """
 
@@ -469,7 +481,8 @@ def plan_step(  # noqa: PLR0913
     when it arrives. Starting from MOVE_OVERHEAD ahead, the target at the
     estimated arrival gives the move time and from it a new arrival, until
     two estimates agree within ARRIVAL_TOLERANCE or MAX_ARRIVAL_ESTIMATES
-    are made. Short steps agree at the second estimate.
+    are made. Short steps agree at the second estimate. The target is taken
+    AIM_AHEAD after the arrival.
 
     One estimate was not enough: in the lab on 2026-11-25 the steps in the
     bend of rod B took 2 to 3 s, the plate turned 0.5 rad meanwhile, and the
@@ -495,7 +508,7 @@ def plan_step(  # noqa: PLR0913
             planner,
             kinematics,
             index,
-            arrival_time,
+            arrival_time + AIM_AHEAD,
             joint_angles,
             previous_turn=hoop_turn,
             can_flip=can_flip,
@@ -510,7 +523,9 @@ def plan_step(  # noqa: PLR0913
     return StepPlan(
         arrival_time=arrival_time,
         hoop_turn=chosen_turn,
-        hoop_pose=planner.get_hoop_pose(arrival_time, index, chosen_turn),
+        hoop_pose=planner.get_hoop_pose(
+            arrival_time + AIM_AHEAD, index, chosen_turn
+        ),
         joint_angles=target_angles,
     )
 
