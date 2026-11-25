@@ -72,6 +72,14 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 
 Every step is aimed where the rod will be when the robot arrives: the time of the move at the joint speeds of `ctu_crs`, times `MOVE_TIME_FACTOR` for speeding up and slowing down, plus `MOVE_OVERHEAD`. The next step is sent when the robot stands still. The log has the expected and the real time, the handle angle and the joint angles of every step.
 
+To compare the simulation with the real run, the log also has:
+
+- `Simulated step ...` for every step of the chosen run: when it is sent and arrives, counted from the start, its handle angle and joint angles. `Simulated run: ...` sums it up with the joint margin and how long the search took.
+- `Check ...` after every step on the rod:
+  - how far the hoop center, from the measured joint angles, is from the predicted rod axis, and how much of that is ahead of the rod in the direction it moves (negative is behind),
+  - how much later (+) or earlier (−) the step was sent than in the simulation,
+  - how far the plate seen by the camera is from its prediction, in millimeters and degrees.
+
 The handle points toward the robot base at the start. Every step keeps the handle angle of the previous one when the robot can reach the point with it, otherwise it tries angles 10°, 20° and so on away from it, on both sides, and takes the first that goes. A handle angle goes when the joints are within their limits, above the table, joint 5 is at least 10° from zero (at zero the wrist is in its singularity and joints 4 and 6 turn far for a small move) and none turns by more than 45° in the step, a larger turn would mean the arm swings into another joint configuration with the hoop on the rod. When no angle goes, the hoop goes back out of the rod. Only the first move from home to the synchronization point may turn the joints further. The start search simulates the same choice.
 
 ## Table check

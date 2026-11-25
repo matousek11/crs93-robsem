@@ -57,6 +57,12 @@ At zero the axes of joints 4 and 6 line up, the wrist singularity. Near it
 those two joints turn far for a small move of the hoop.
 """
 
+ARRIVAL_TOLERANCE = 0.02
+"""Two estimates of the arrival of a step closer than this agree [s]."""
+
+MAX_ARRIVAL_ESTIMATES = 4
+"""Most estimates of the arrival of one step, the last one is used."""
+
 _MIN_HANDLE_LENGTH = 1e-9
 """Below this the direction to the robot base is along the hoop axis."""
 
@@ -412,9 +418,15 @@ def plan_step(  # noqa: PLR0913
 ) -> StepPlan:
     """Plans a step to a path point, sent now and aimed at the arrival.
 
-    How long the move takes depends on where it goes, so the target is first
-    estimated for MOVE_OVERHEAD ahead and then planned for the arrival. The
-    table hardly moves in the difference, one estimate is enough.
+    How long the move takes depends on where it goes, and where it goes on
+    when it arrives. Starting from MOVE_OVERHEAD ahead, the target at the
+    estimated arrival gives the move time and from it a new arrival, until
+    two estimates agree within ARRIVAL_TOLERANCE or MAX_ARRIVAL_ESTIMATES
+    are made. Short steps agree at the second estimate.
+
+    One estimate was not enough: in the lab on 2026-11-25 the steps in the
+    bend of rod B took 2 to 3 s, the plate turned 0.5 rad meanwhile, and the
+    run fell 3.2 s behind the start search.
 
     Args:
         planner: Path of the hoop.
@@ -430,32 +442,28 @@ def plan_step(  # noqa: PLR0913
         NoJointConfigError: No handle angle reaches the point.
         ValueError: The planner cannot give a pose for the point.
     """
-    _, estimated_angles = choose_handle_angle(
-        planner,
-        kinematics,
-        index,
-        sent_time + control.MOVE_OVERHEAD,
-        joint_angles,
-        previous_angle=handle_angle,
-        can_flip=can_flip,
-    )
-    move_time = control.get_move_time(
-        joint_angles, estimated_angles, kinematics.joint_speeds
-    )
-    arrival_time = sent_time + control.get_lead_time(move_time)
-    handle_angle, target_angles = choose_handle_angle(
-        planner,
-        kinematics,
-        index,
-        arrival_time,
-        joint_angles,
-        previous_angle=handle_angle,
-        can_flip=can_flip,
-    )
+    arrival_time = sent_time + control.MOVE_OVERHEAD
+    for _ in range(MAX_ARRIVAL_ESTIMATES):
+        chosen_angle, target_angles = choose_handle_angle(
+            planner,
+            kinematics,
+            index,
+            arrival_time,
+            joint_angles,
+            previous_angle=handle_angle,
+            can_flip=can_flip,
+        )
+        move_time = control.get_move_time(
+            joint_angles, target_angles, kinematics.joint_speeds
+        )
+        next_arrival_time = sent_time + control.get_lead_time(move_time)
+        if abs(next_arrival_time - arrival_time) < ARRIVAL_TOLERANCE:
+            break
+        arrival_time = next_arrival_time
     return StepPlan(
         arrival_time=arrival_time,
-        handle_angle=handle_angle,
-        hoop_pose=planner.get_hoop_pose(arrival_time, index, handle_angle),
+        handle_angle=chosen_angle,
+        hoop_pose=planner.get_hoop_pose(arrival_time, index, chosen_angle),
         joint_angles=target_angles,
     )
 

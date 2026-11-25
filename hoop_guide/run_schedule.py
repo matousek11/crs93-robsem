@@ -12,6 +12,8 @@ limit and the wrist getting straight, a run along either fails with a small
 error of the prediction or of the step times.
 """
 
+import dataclasses
+import enum
 import math
 
 import numpy as np
@@ -55,14 +57,61 @@ the prediction gets worse with time [rad]."""
 _SYNC_INDEX = 0
 
 
-def find_start_time(
+class RunPhase(enum.Enum):
+    """Part of a run down the rod."""
+
+    DOWN = "down"
+    BOTTOM = "bottom"
+    UP = "up"
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class SimulatedStep:
+    """One step of a simulated run.
+
+    Attributes:
+        phase: Part of the run the step belongs to.
+        index: Path point of the step.
+        sent_time: time.monotonic when the step is sent [s].
+        arrival_time: time.monotonic when the robot arrives [s].
+        handle_angle: Handle angle of the step [rad].
+        joint_angles: Joint angles the robot arrives with [rad].
+    """
+
+    phase: RunPhase
+    index: int
+    sent_time: float
+    arrival_time: float
+    handle_angle: float
+    joint_angles: JointConfig
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class RunSchedule:
+    """The start of a run and its simulated steps.
+
+    Attributes:
+        start_time: time.monotonic when the hoop leaves the synchronization
+            point [s].
+        joint_margin: Smallest joint margin of the run, see
+            find_run_schedule [rad].
+        steps: Simulated steps from the start back to the synchronization
+            point.
+    """
+
+    start_time: float
+    joint_margin: float
+    steps: tuple[SimulatedStep, ...]
+
+
+def find_run_schedule(
     planner: RodPlanner,
     kinematics: Kinematics,
     joint_angles: JointConfig,
     handle_angle: float,
     now: float,
-) -> float | None:
-    """Returns the start of a run down the rod with the most joint margin.
+) -> RunSchedule | None:
+    """Returns the run down the rod with the most joint margin.
 
     Tried every SEARCH_STEP from now + EARLIEST_START to now +
     SEARCH_WINDOW. Until the start the hoop follows the synchronization
@@ -88,9 +137,9 @@ def find_start_time(
         now: time.monotonic now [s].
 
     Returns:
-        time.monotonic of the start [s], None when no start goes through.
+        The chosen run, None when no start goes through.
     """
-    margin_by_start: dict[float, float] = {}
+    schedules: list[RunSchedule] = []
     for search_index in range(round(SEARCH_WINDOW / SEARCH_STEP) + 1):
         start_time = now + search_index * SEARCH_STEP
         try:
@@ -107,18 +156,21 @@ def find_start_time(
             break
         if start_time < now + EARLIEST_START:
             continue
-        margin = _simulate_run(
+        schedule = _simulate_run(
             planner, kinematics, joint_angles, handle_angle, start_time
         )
-        if margin is not None:
-            margin_by_start[start_time] = margin
-    if not margin_by_start:
+        if schedule is not None:
+            schedules.append(schedule)
+    if not schedules:
         return None
-    good_enough = max(margin_by_start.values()) - JOINT_MARGIN_TOLERANCE
-    return min(
-        start_time
-        for start_time, margin in margin_by_start.items()
-        if margin >= good_enough
+    good_enough = (
+        max(schedule.joint_margin for schedule in schedules)
+        - JOINT_MARGIN_TOLERANCE
+    )
+    return next(
+        schedule
+        for schedule in schedules
+        if schedule.joint_margin >= good_enough
     )
 
 
@@ -128,54 +180,50 @@ def _simulate_run(
     joint_angles: JointConfig,
     handle_angle: float,
     start_time: float,
-) -> float | None:
-    """Simulates the run from start_time.
-
-    Returns:
-        The smallest joint margin in the run, see _get_joint_margin [rad],
-        None when a step does not go.
-    """
+) -> RunSchedule | None:
+    """Simulates the run from start_time, None when a step does not go."""
     last_index = planner.point_count - 1
-    way_down = list(range(_SYNC_INDEX + 1, last_index + 1))
-    way_up = list(range(last_index - 1, _SYNC_INDEX - 1, -1))
     time, angles, angle = start_time, joint_angles, handle_angle
+    steps: list[SimulatedStep] = []
     margin = math.inf
+
+    def simulate(phase: RunPhase, index: int) -> None:
+        nonlocal time, angles, angle, margin
+        step, step_margin = _simulate_step(
+            planner, kinematics, phase, index, time, angles, angle
+        )
+        steps.append(step)
+        margin = min(margin, step_margin)
+        time = step.arrival_time + READY_FLAG_DELAY
+        angles, angle = step.joint_angles, step.handle_angle
+
     try:
-        for index in way_down:
-            time, angles, angle, step_margin = _simulate_step(
-                planner, kinematics, index, time, angles, angle
-            )
-            margin = min(margin, step_margin)
+        for index in range(_SYNC_INDEX + 1, last_index + 1):
+            simulate(RunPhase.DOWN, index)
         wait_end = time + BOTTOM_WAIT
         while time < wait_end:
-            time, angles, angle, step_margin = _simulate_step(
-                planner, kinematics, last_index, time, angles, angle
-            )
-            margin = min(margin, step_margin)
-        for index in way_up:
-            time, angles, angle, step_margin = _simulate_step(
-                planner, kinematics, index, time, angles, angle
-            )
-            margin = min(margin, step_margin)
+            simulate(RunPhase.BOTTOM, last_index)
+        for index in range(last_index - 1, _SYNC_INDEX - 1, -1):
+            simulate(RunPhase.UP, index)
     except (NoJointConfigError, ValueError):
         return None
-    return margin
+    return RunSchedule(start_time, margin, tuple(steps))
 
 
 def _simulate_step(  # noqa: PLR0913, PLR0917
     planner: RodPlanner,
     kinematics: Kinematics,
+    phase: RunPhase,
     index: int,
     sent_time: float,
     joint_angles: JointConfig,
     handle_angle: float,
-) -> tuple[float, JointConfig, float, float]:
+) -> tuple[SimulatedStep, float]:
     """Simulates PuzzleMode._step.
 
     Returns:
-        When the next step is sent [s], the joint angles then [rad], the
-        handle angle then [rad] and the smallest joint margin around the
-        arrival, see _get_joint_margin [rad].
+        The step and the smallest joint margin around its arrival, see
+        _get_joint_margin [rad].
 
     Raises:
         NoJointConfigError: The point is not reachable around the arrival.
@@ -202,12 +250,15 @@ def _simulate_step(  # noqa: PLR0913, PLR0917
             joint_margin,
             _get_joint_margin(nearby_angles, kinematics.joint_limits),
         )
-    return (
-        step.arrival_time + READY_FLAG_DELAY,
-        step.joint_angles,
-        step.handle_angle,
-        joint_margin,
+    simulated_step = SimulatedStep(
+        phase=phase,
+        index=index,
+        sent_time=sent_time,
+        arrival_time=step.arrival_time,
+        handle_angle=step.handle_angle,
+        joint_angles=step.joint_angles,
     )
+    return simulated_step, joint_margin
 
 
 def _get_joint_margin(

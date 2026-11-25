@@ -14,12 +14,18 @@ from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
 from hoop_guide.planning import plan_step
 from hoop_guide.plate import PLATE_HEIGHT
+from hoop_guide.plate import estimate_plate_pose
+from hoop_guide.plate_tracker import CAMERA_LATENCY
 from hoop_guide.plate_tracker import PLATE_SAMPLE_COUNT
 from hoop_guide.plate_tracker import PlateTracker
 from hoop_guide.rods import Puzzle
+from hoop_guide.run_check import get_hoop_offset
+from hoop_guide.run_check import get_plate_error
 from hoop_guide.run_schedule import BOTTOM_WAIT
 from hoop_guide.run_schedule import SEARCH_WINDOW
-from hoop_guide.run_schedule import find_start_time
+from hoop_guide.run_schedule import RunPhase
+from hoop_guide.run_schedule import RunSchedule
+from hoop_guide.run_schedule import find_run_schedule
 from hoop_guide.types import Homography
 from hoop_guide.types import JointConfig
 from hoop_guide.types import Pose
@@ -37,7 +43,11 @@ FRAME_POLL_PERIOD = 0.02
 MOTION_POLL_PERIOD = 0.02
 """Time between two questions whether the robot still moves [s]."""
 
+ROD_VELOCITY_TIME = 0.1
+"""Time over which the velocity of the rod is taken for the log [s]."""
+
 _SYNC_INDEX = 0
+_MILLIMETERS_PER_METER = 1000.0
 
 
 class PuzzleMotion(Kinematics, Protocol):
@@ -45,6 +55,9 @@ class PuzzleMotion(Kinematics, Protocol):
 
     def get_joint_angles(self) -> JointConfig:
         """Returns the joint angles measured by the controller."""
+
+    def get_hoop_pose(self) -> Pose:
+        """Returns the hoop pose computed from the measured joint angles."""
 
     def move_to_ik(self, hoop_pose: Pose) -> None:
         """Starts a move that puts the hoop into the pose.
@@ -132,7 +145,7 @@ class PuzzleMode:
     A run measures the table motion from the first PLATE_SAMPLE_COUNT frames
     with the plate, moves the hoop to the synchronization point above the
     rod and follows the rotation there. Enter searches for a start whose
-    whole run goes through, see find_start_time, the hoop keeps following
+    whole run goes through, see find_run_schedule, the hoop keeps following
     the point until then. Then it goes down the rod point by point, follows
     the last point for BOTTOM_WAIT, goes back out to the synchronization
     point and returns home. Every step is aimed where the rod is when the
@@ -179,6 +192,8 @@ class PuzzleMode:
         self._plate_height = plate_height
         self._clock: Clock = clock if clock is not None else SystemClock()
         self._handle_angle = 0.0
+        self._table_motion: TableMotion | None = None
+        self._planned_sent_times: dict[tuple[RunPhase, int], float] = {}
 
     def run(self, puzzle: Puzzle) -> None:
         """Goes through the rod of the puzzle, until done or stopped.
@@ -198,6 +213,8 @@ class PuzzleMode:
             table_motion = self._measure_table_motion(frames, homography)
             if table_motion is None:
                 return
+            self._table_motion = table_motion
+            self._planned_sent_times = {}
             planner = RodPlanner(puzzle, table_motion, plate_height)
             if not self._synchronize(planner):
                 return
@@ -252,7 +269,7 @@ class PuzzleMode:
         """Follows the synchronization point until the start, False if stopped.
 
         Enter searches for a start whose whole run goes through, see
-        find_start_time. The hoop keeps following the point until then.
+        find_run_schedule. The hoop keeps following the point until then.
         """
         self._info("Moving to the synchronization point.")
         try:
@@ -276,25 +293,58 @@ class PuzzleMode:
             return False
 
     def _find_start_time(self, planner: RodPlanner) -> float | None:
-        """Searches for a safe start and reports it, None when there is none."""
-        now = self._clock.now()
-        start_time = find_start_time(
+        """Searches for a safe start and reports it, None when there is none.
+
+        The simulated steps of the chosen run go to the log, and their send
+        times are kept to compare the real steps with them.
+        """
+        search_start = self._clock.now()
+        schedule = find_run_schedule(
             planner,
             self._motion,
             self._motion.get_joint_angles(),
             self._handle_angle,
-            now,
+            search_start,
         )
-        if start_time is None:
+        if schedule is None:
             self._warn(
                 f"No run down the rod goes through within {SEARCH_WINDOW:.0f}"
                 " s, the hoop stays at the synchronization point. Press Enter"
                 " to search again, c to stop."
             )
-        else:
-            remaining_time = start_time - self._clock.now()
-            self._info(f"Going down the rod in {remaining_time:.1f} s.")
-        return start_time
+            return None
+        self._log_schedule(schedule, self._clock.now() - search_start)
+        self._planned_sent_times = {}
+        for step in schedule.steps:
+            self._planned_sent_times.setdefault(
+                (step.phase, step.index), step.sent_time
+            )
+        remaining_time = schedule.start_time - self._clock.now()
+        self._info(f"Going down the rod in {remaining_time:.1f} s.")
+        return schedule.start_time
+
+    def _log_schedule(self, schedule: RunSchedule, search_time: float) -> None:
+        """Writes the simulated steps of a run to the log."""
+        for step in schedule.steps:
+            logger.info(
+                "Simulated step %s to path point %d: sent at %+.3f s, arrives"
+                " at %+.3f s, handle %.0f deg, joints %s deg.",
+                step.phase.value,
+                step.index,
+                step.sent_time - schedule.start_time,
+                step.arrival_time - schedule.start_time,
+                math.degrees(step.handle_angle),
+                [round(math.degrees(angle), 1) for angle in step.joint_angles],
+            )
+        logger.info(
+            "Simulated run: %d steps, %.2f s from the start back to the"
+            " synchronization point, joint margin %.1f deg, search took"
+            " %.2f s.",
+            len(schedule.steps),
+            schedule.steps[-1].arrival_time - schedule.start_time,
+            math.degrees(schedule.joint_margin),
+            search_time,
+        )
 
     def _go_down(self, planner: RodPlanner, last_index: int) -> int:
         """Goes down the rod, returns the last path point reached."""
@@ -305,14 +355,14 @@ class PuzzleMode:
                 if self._keyboard.poll_key() is Key.STOP:
                     self._info("Stopped, going back out.")
                     return reached_index
-                self._step(planner, index)
+                self._step(planner, index, phase=RunPhase.DOWN)
                 reached_index = index
             wait_end = self._clock.now() + BOTTOM_WAIT
             while self._clock.now() < wait_end:
                 if self._keyboard.poll_key() is Key.STOP:
                     self._info("Stopped, going back out.")
                     return reached_index
-                self._step(planner, last_index)
+                self._step(planner, last_index, phase=RunPhase.BOTTOM)
         except (NoJointConfigError, ValueError) as error:
             self._warn(f"Path point is out of reach, going back out: {error}")
         return reached_index
@@ -326,7 +376,7 @@ class PuzzleMode:
         self._info("Going back out of the rod.")
         try:
             for index in range(reached_index - 1, _SYNC_INDEX - 1, -1):
-                self._step(planner, index)
+                self._step(planner, index, phase=RunPhase.UP)
         except (NoJointConfigError, ValueError) as error:
             self._warn(
                 f"Going back out failed, the hoop may still be on the rod: "
@@ -337,7 +387,11 @@ class PuzzleMode:
         return True
 
     def _step(
-        self, planner: RodPlanner, index: int, can_flip: bool = False
+        self,
+        planner: RodPlanner,
+        index: int,
+        can_flip: bool = False,
+        phase: RunPhase | None = None,
     ) -> None:
         """Moves the hoop to a path point predicted for its arrival.
 
@@ -346,6 +400,9 @@ class PuzzleMode:
             index: Path point to move to.
             can_flip: True when a joint may change by more than
                 MAX_JOINT_STEP, for the move from home to the path.
+            phase: Part of the run down the rod, None at the synchronization
+                point. On the rod every step is checked in the log, see
+                _log_check.
 
         Raises:
             NoJointConfigError: No handle angle reaches the point, nothing
@@ -374,6 +431,71 @@ class PuzzleMode:
             self._clock.now() - sent_time,
             math.degrees(step.handle_angle),
             [round(math.degrees(angle), 1) for angle in step.joint_angles],
+        )
+        if phase is not None:
+            self._log_check(planner, index, phase, sent_time)
+
+    def _log_check(
+        self,
+        planner: RodPlanner,
+        index: int,
+        phase: RunPhase,
+        sent_time: float,
+    ) -> None:
+        """Writes how far the arrived step is from the predictions.
+
+        The measured hoop against the predicted rod at the same moment, the
+        send time against the simulated run and the plate seen by the camera
+        against its prediction.
+        """
+        now = self._clock.now()
+        rod_pose = planner.get_hoop_pose(now, index, self._handle_angle)
+        later_rod_pose = planner.get_hoop_pose(
+            now + ROD_VELOCITY_TIME, index, self._handle_angle
+        )
+        rod_velocity = (later_rod_pose[:3, 3] - rod_pose[:3, 3]) / (
+            ROD_VELOCITY_TIME
+        )
+        offset, ahead = get_hoop_offset(
+            self._motion.get_hoop_pose(),
+            rod_pose,
+            (
+                float(rod_velocity[0]),
+                float(rod_velocity[1]),
+                float(rod_velocity[2]),
+            ),
+        )
+        planned_sent_time = self._planned_sent_times.pop((phase, index), None)
+        timing = (
+            "no simulated step"
+            if planned_sent_time is None
+            else f"sent {sent_time - planned_sent_time:+.2f} s against the"
+            " simulation"
+        )
+        logger.info(
+            "Check %s at path point %d: hoop %.1f mm off the rod, %+.1f mm"
+            " ahead of it; %s; %s.",
+            phase.value,
+            index,
+            offset * _MILLIMETERS_PER_METER,
+            ahead * _MILLIMETERS_PER_METER,
+            timing,
+            self._describe_plate_error(),
+        )
+
+    def _describe_plate_error(self) -> str:
+        """Compares the plate in the newest frame with its prediction."""
+        frame = self._frames.latest if self._frames is not None else None
+        if frame is None or self._homography is None:
+            return "no camera frame"
+        measured = estimate_plate_pose(frame.markers, self._homography)
+        if measured is None or self._table_motion is None:
+            return "plate not seen"
+        predicted = self._table_motion.predict(frame.timestamp - CAMERA_LATENCY)
+        distance, heading = get_plate_error(measured, predicted)
+        return (
+            f"plate {distance * _MILLIMETERS_PER_METER:.1f} mm and"
+            f" {math.degrees(heading):+.1f} deg off the prediction"
         )
 
     def _info(self, message: str) -> None:

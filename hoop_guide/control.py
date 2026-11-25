@@ -26,7 +26,9 @@ from hoop_guide.types import JointSpeeds
 # which is computed before every step is sent. The model of 1.0 and 0.25 s
 # was 0.13 s short per step, about 5 s over a run. A square root term for
 # speeding up fits only 7 ms better, so the model stays linear.
-MOVE_OVERHEAD = 0.36
+# Next day, puzzle A2: the short steps took 32 ms less than expected and the
+# hoop was slightly ahead of the rod. Lowered to 0.33 s.
+MOVE_OVERHEAD = 0.33
 """Time every step takes on top of its move, however small [s].
 
 Planning the step, communication with the controller, waiting for its ready
