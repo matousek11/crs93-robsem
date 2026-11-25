@@ -13,14 +13,15 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import MARKER_CENTERS
 from hoop_guide.plate import MARKER_SIZE
 from hoop_guide.plate import PlatePose
+from hoop_guide.puzzle_mode import INITIAL_SEARCH_TIME
 from hoop_guide.puzzle_mode import MEASUREMENT_TIMEOUT
 from hoop_guide.puzzle_mode import MOTION_POLL_PERIOD
+from hoop_guide.puzzle_mode import SEARCH_TIME_MARGIN
 from hoop_guide.puzzle_mode import PuzzleMode
 from hoop_guide.puzzle_mode import SystemClock
 from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
 from hoop_guide.run_schedule import BOTTOM_WAIT
-from hoop_guide.run_schedule import EARLIEST_START
 from hoop_guide.types import Homography
 from hoop_guide.types import Image
 from hoop_guide.types import JointConfig
@@ -45,8 +46,11 @@ MOVING_CHECKS = 15
 SYNC_HEIGHT = PLATE_HEIGHT + 0.2 + SYNC_DISTANCE
 BOTTOM_HEIGHT = PLATE_HEIGHT + STOP_HEIGHT
 ENTER_TIME = 8.0  # after the measurement of about 5 s [s]
-# A few steps down the rod, after the start EARLIEST_START after Enter [s].
-STOP_ON_ROD_TIME = ENTER_TIME + EARLIEST_START + 1.5
+# The first search ends at once on the fake clock, but the earliest start is
+# where the expected search time puts it.
+FIRST_START_DELAY = SEARCH_TIME_MARGIN * INITIAL_SEARCH_TIME  # [s]
+# A few steps down the rod after the start [s].
+STOP_ON_ROD_TIME = ENTER_TIME + FIRST_START_DELAY + 1.5
 LOW_HEIGHT = PLATE_HEIGHT + 0.1  # rules make points below this unreachable
 
 
@@ -149,17 +153,21 @@ class FakeMotion:
         flip_after: From this time points below LOW_HEIGHT need the fourth
             joint turned by half a turn [s], None for never.
         start_joint_angles: Joint angles before the first move [rad].
+        choice_time: Time every choice of a joint configuration takes, so
+            a search takes time on the fake clock [s].
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         clock,
         is_reachable=lambda pose, time: True,
         is_reachable_in_search=None,
         flip_after=None,
         start_joint_angles=None,
+        choice_time=0.0,
     ):
         self._clock = clock
+        self._choice_time = choice_time
         self._is_reachable = is_reachable
         self._is_reachable_in_search = is_reachable_in_search or is_reachable
         self._flip_after = flip_after
@@ -184,6 +192,7 @@ class FakeMotion:
         return self.moves[-1][1].copy()
 
     def choose_joint_config(self, hoop_pose, joint_angles):
+        self._clock.time += self._choice_time
         if not self._is_reachable_in_search(hoop_pose, self._clock.time):
             raise NoJointConfigError("No joint configuration.")
         is_flipped = (
@@ -274,6 +283,7 @@ class Run:
         is_reachable_in_search=None,
         flip_after=None,
         start_joint_angles=None,
+        choice_time=0.0,
         has_camera=True,
         is_plate_visible=True,
         plate_hidden_after=None,
@@ -288,6 +298,7 @@ class Run:
             is_reachable_in_search,
             flip_after,
             start_joint_angles,
+            choice_time,
         )
         self.robot = FakeRobot()
         self.keyboard = FakeKeyboard(self.clock, timed_keys)
@@ -454,7 +465,7 @@ def test_stop_while_following_the_bottom_goes_back_out_and_home():
     path = RodPlanner(Puzzle.A1, still_table, PLATE_HEIGHT).update(0.0, 0)
     step_time = MOVING_CHECKS * MOTION_POLL_PERIOD
     latest_bottom_time = (
-        ENTER_TIME + EARLIEST_START + (len(path) + 1) * step_time
+        ENTER_TIME + FIRST_START_DELAY + (len(path) + 1) * step_time
     )
     stop_at_bottom_time = latest_bottom_time + 0.2
     run = run_puzzle(
@@ -523,7 +534,7 @@ def test_joint_flip_on_the_rod_is_not_sent_and_the_hoop_goes_back_out():
     # The start search does not see the flip, it appears after the start.
     run = run_puzzle(
         timed_keys=[(ENTER_TIME, Key.ENTER)],
-        flip_after=ENTER_TIME + EARLIEST_START + 0.5,
+        flip_after=ENTER_TIME + FIRST_START_DELAY + 0.5,
     )
 
     assert "Joint 4 would turn by 180 deg" in run.reporter.warnings[0]
@@ -604,6 +615,35 @@ def test_check_says_when_the_camera_cannot_see_the_plate(
     ]
     assert checks
     assert all(expected in check for check in checks)
+
+
+def test_tilted_hoop_is_logged_with_its_tilt(caplog):
+    # Only a hoop axis tilted away from the vertical rod is reachable.
+    def is_tilted(pose, time):
+        return pose[2, 2] > -math.cos(math.radians(5.0))
+
+    with caplog.at_level("INFO", logger="hoop_guide.puzzle_mode"):
+        run = run_puzzle(
+            timed_keys=[(ENTER_TIME, Key.ENTER)],
+            is_reachable_in_search=is_tilted,
+        )
+
+    assert run.robot.home_count == 1
+    assert any(
+        "tilt 10 deg toward" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_start_passed_during_a_long_search_does_not_go_down():
+    # Every choice of joints takes 0.1 s, the search outlasts its estimate.
+    run = run_puzzle(
+        timed_keys=[(ENTER_TIME, Key.ENTER), (ENTER_TIME + 1000.0, Key.STOP)],
+        choice_time=0.1,
+    )
+
+    assert "the start has passed" in run.reporter.warnings[0]
+    assert min(run.motion.heights()) == pytest.approx(SYNC_HEIGHT)
+    assert run.robot.home_count == 0
 
 
 def test_without_a_safe_start_the_hoop_stays_at_the_sync_point():

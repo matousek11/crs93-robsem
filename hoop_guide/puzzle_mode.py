@@ -9,6 +9,7 @@ from typing import Self
 
 from hoop_guide.estimation import TableMotion
 from hoop_guide.keyboard import Key
+from hoop_guide.planning import HoopTurn
 from hoop_guide.planning import Kinematics
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
@@ -42,6 +43,19 @@ FRAME_POLL_PERIOD = 0.02
 
 MOTION_POLL_PERIOD = 0.02
 """Time between two questions whether the robot still moves [s]."""
+
+# Measured on 2026-11-25: with tilts the search took up to 8.3 s on a
+# laptop, the lab computer was about twice slower.
+INITIAL_SEARCH_TIME = 10.0
+"""Expected time of the first start search [s]. Later searches expect the
+time the previous one took."""
+
+SEARCH_TIME_MARGIN = 1.5
+"""How many times the expected search time the earliest tried start is
+after the search begins."""
+
+MIN_START_DELAY = 1.0
+"""Shortest time from the search to the earliest tried start [s]."""
 
 ROD_VELOCITY_TIME = 0.1
 """Time over which the velocity of the rod is taken for the log [s]."""
@@ -191,7 +205,8 @@ class PuzzleMode:
         self._homography = homography
         self._plate_height = plate_height
         self._clock: Clock = clock if clock is not None else SystemClock()
-        self._handle_angle = 0.0
+        self._hoop_turn = HoopTurn()
+        self._expected_search_time = INITIAL_SEARCH_TIME
         self._table_motion: TableMotion | None = None
         self._planned_sent_times: dict[tuple[RunPhase, int], float] = {}
 
@@ -207,7 +222,7 @@ class PuzzleMode:
         if frames is None or homography is None or plate_height is None:
             self._warn(self._missing_requirement())
             return
-        self._handle_angle = 0.0
+        self._hoop_turn = HoopTurn()
         with self._keyboard:
             self._keyboard.discard_pending()
             table_motion = self._measure_table_motion(frames, homography)
@@ -295,17 +310,25 @@ class PuzzleMode:
     def _find_start_time(self, planner: RodPlanner) -> float | None:
         """Searches for a safe start and reports it, None when there is none.
 
-        The simulated steps of the chosen run go to the log, and their send
+        The earliest tried start is SEARCH_TIME_MARGIN times the time of the
+        previous search after now, so the search ends before it. The
+        simulated steps of the chosen run go to the log, and their send
         times are kept to compare the real steps with them.
         """
         search_start = self._clock.now()
+        start_delay = max(
+            MIN_START_DELAY, SEARCH_TIME_MARGIN * self._expected_search_time
+        )
         schedule = find_run_schedule(
             planner,
             self._motion,
             self._motion.get_joint_angles(),
-            self._handle_angle,
-            search_start,
+            self._hoop_turn,
+            now=search_start,
+            earliest_start=search_start + start_delay,
         )
+        search_time = self._clock.now() - search_start
+        self._expected_search_time = search_time
         if schedule is None:
             self._warn(
                 f"No run down the rod goes through within {SEARCH_WINDOW:.0f}"
@@ -313,7 +336,14 @@ class PuzzleMode:
                 " to search again, c to stop."
             )
             return None
-        self._log_schedule(schedule, self._clock.now() - search_start)
+        if schedule.start_time < self._clock.now():
+            self._warn(
+                f"The search took {search_time:.1f} s, longer than the"
+                f" {start_delay:.1f} s expected, and the start has passed."
+                " Press Enter to search again, c to stop."
+            )
+            return None
+        self._log_schedule(schedule, search_time)
         self._planned_sent_times = {}
         for step in schedule.steps:
             self._planned_sent_times.setdefault(
@@ -328,12 +358,12 @@ class PuzzleMode:
         for step in schedule.steps:
             logger.info(
                 "Simulated step %s to path point %d: sent at %+.3f s, arrives"
-                " at %+.3f s, handle %.0f deg, joints %s deg.",
+                " at %+.3f s, %s, joints %s deg.",
                 step.phase.value,
                 step.index,
                 step.sent_time - schedule.start_time,
                 step.arrival_time - schedule.start_time,
-                math.degrees(step.handle_angle),
+                _describe_turn(step.hoop_turn),
                 [round(math.degrees(angle), 1) for angle in step.joint_angles],
             )
         logger.info(
@@ -416,20 +446,20 @@ class PuzzleMode:
             index,
             sent_time,
             self._motion.get_joint_angles(),
-            handle_angle=self._handle_angle,
+            hoop_turn=self._hoop_turn,
             can_flip=can_flip,
         )
-        self._handle_angle = step.handle_angle
+        self._hoop_turn = step.hoop_turn
         self._motion.move_to_ik(step.hoop_pose)
         while self._motion.is_in_motion():
             self._clock.sleep(MOTION_POLL_PERIOD)
         logger.info(
-            "Step to path point %d: expected %.3f s, took %.3f s, handle %.0f"
-            " deg, joints %s deg.",
+            "Step to path point %d: expected %.3f s, took %.3f s, %s, joints"
+            " %s deg.",
             index,
             step.arrival_time - sent_time,
             self._clock.now() - sent_time,
-            math.degrees(step.handle_angle),
+            _describe_turn(step.hoop_turn),
             [round(math.degrees(angle), 1) for angle in step.joint_angles],
         )
         if phase is not None:
@@ -449,10 +479,8 @@ class PuzzleMode:
         against its prediction.
         """
         now = self._clock.now()
-        rod_pose = planner.get_hoop_pose(now, index, self._handle_angle)
-        later_rod_pose = planner.get_hoop_pose(
-            now + ROD_VELOCITY_TIME, index, self._handle_angle
-        )
+        rod_pose = planner.get_hoop_pose(now, index)
+        later_rod_pose = planner.get_hoop_pose(now + ROD_VELOCITY_TIME, index)
         rod_velocity = (later_rod_pose[:3, 3] - rod_pose[:3, 3]) / (
             ROD_VELOCITY_TIME
         )
@@ -508,3 +536,14 @@ class PuzzleMode:
     def _warn(self, message: str) -> None:
         logger.warning(message)
         self._reporter.warning(message)
+
+
+def _describe_turn(hoop_turn: HoopTurn) -> str:
+    """Describes a hoop turn for the log, angles in degrees."""
+    description = f"handle {math.degrees(hoop_turn.handle_angle):.0f} deg"
+    if hoop_turn.tilt:
+        description += (
+            f", tilt {math.degrees(hoop_turn.tilt):.0f} deg toward"
+            f" {math.degrees(hoop_turn.tilt_direction):.0f} deg"
+        )
+    return description

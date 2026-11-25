@@ -1,6 +1,7 @@
 """Moves of the hoop to a target pose and the hoop path along the rod."""
 
 import dataclasses
+import functools
 import math
 from collections.abc import Iterator
 from typing import Protocol
@@ -44,6 +45,21 @@ HANDLE_ANGLE_STEP = math.radians(10.0)
 """Spacing of the handle angles tried when the previous one does not go
 [rad]."""
 
+# Decided on 2026-11-25: rod C at the lab table position went from no
+# heading out of 8 with no tilt to 7 with tilts up to 10 deg in the start
+# search, 20 deg added none. A tilt of 10 deg costs about 1.4 mm of the
+# about 23 mm the rod has in the hoop.
+MAX_TILT = math.radians(10.0)
+"""Largest tilt of the hoop axis away from the rod [rad]."""
+
+TILT_DIRECTION_STEP = math.radians(45.0)
+"""Spacing of the directions the hoop axis may tilt to [rad]."""
+
+TILT_CHANGE_COST = math.radians(15.0)
+"""How much a change of the tilt or its direction counts against keeping
+it, in the order the turns are tried, as a turn of the handle by this angle
+[rad]."""
+
 WRIST_BEND_JOINT = 4
 """Index of the joint that bends the wrist, joint 5 of the CRS robots."""
 
@@ -69,6 +85,26 @@ _MIN_HANDLE_LENGTH = 1e-9
 
 class NoJointConfigError(RuntimeError):
     """Raised when no joint configuration is left to reach a pose."""
+
+
+@dataclasses.dataclass(frozen=True)
+class HoopTurn:
+    """How the hoop is turned from its pose on the rod.
+
+    With no turn the hoop axis is the rod tangent and the handle points
+    toward the robot base, see RodPlanner.
+
+    Attributes:
+        handle_angle: Turn about the rod, counterclockwise looking against
+            the hoop z axis [rad].
+        tilt: Tilt of the hoop axis away from the rod, 0 or MAX_TILT [rad].
+        tilt_direction: Where the hoop z axis tilts to, from the handle
+            counterclockwise looking against the hoop z axis [rad].
+    """
+
+    handle_angle: float = 0.0
+    tilt: float = 0.0
+    tilt_direction: float = 0.0
 
 
 class Kinematics(Protocol):
@@ -318,37 +354,33 @@ class RodPlanner:
         return self._get_hoop_poses(target_time, start_index, self.point_count)
 
     def get_hoop_pose(
-        self, target_time: float, index: int, handle_angle: float = 0.0
+        self, target_time: float, index: int, hoop_turn: HoopTurn | None = None
     ) -> Pose:
         """Returns the hoop pose of one path point, for a moment.
 
-        With handle_angle 0 the same as update(target_time, index)[0],
-        without computing the rest of the path.
+        With no hoop_turn the same as update(target_time, index)[0], without
+        computing the rest of the path.
 
         Args:
             target_time: time.monotonic at which the pose holds [s].
             index: Path point, 0 is the synchronization point.
-            handle_angle: Turn of the handle about the rod from the direction
-                toward the robot base, counterclockwise looking against the
-                hoop z axis [rad].
+            hoop_turn: How the hoop is turned from its pose on the rod, the
+                hoop center stays on the rod.
 
         Raises:
             ValueError: As update.
         """
-        return self._get_hoop_poses(
-            target_time, index, index + 1, handle_angle
-        )[0]
+        hoop_pose = self._get_hoop_poses(target_time, index, index + 1)[0]
+        if hoop_turn is None:
+            return hoop_pose
+        return turn_hoop(hoop_pose, hoop_turn)
 
     def _get_hoop_poses(
-        self,
-        target_time: float,
-        start_index: int,
-        stop_index: int,
-        handle_angle: float = 0.0,
+        self, target_time: float, start_index: int, stop_index: int
     ) -> tuple[Pose, ...]:
         """Returns the hoop poses of the points start_index to stop_index - 1.
 
-        See update and get_hoop_pose.
+        See update.
         """
         if not 0 <= start_index < self.point_count:
             raise ValueError(
@@ -368,17 +400,12 @@ class RodPlanner:
         for offset, (point, tangent) in enumerate(
             zip(points, tangents, strict=True)
         ):
-            # TODO: when the rod slopes to the robot, the handle points
-            # down and near the plate the flange can go below the plate top.
             handle = _handle_toward_base(point, tangent)
             if handle is None:
                 raise ValueError(
                     "Handle cannot point toward the robot base at path point"
                     f" {start_index + offset}."
                 )
-            handle = math.cos(handle_angle) * handle + math.sin(
-                handle_angle
-            ) * np.cross(tangent, handle)
             hoop_pose = np.eye(4)
             hoop_pose[:3, 0] = handle
             hoop_pose[:3, 1] = np.cross(tangent, handle)
@@ -388,20 +415,40 @@ class RodPlanner:
         return tuple(hoop_poses)
 
 
+def turn_hoop(hoop_pose: Pose, hoop_turn: HoopTurn) -> Pose:
+    """Returns the hoop pose turned about the hoop center.
+
+    The handle is turned about the hoop z axis first, then the hoop is
+    tilted toward tilt_direction, measured from the turned handle.
+    """
+    rotation = hoop_pose[:3, :3] @ _rotation_about_z(hoop_turn.handle_angle)
+    if hoop_turn.tilt:
+        tilt_axis = rotation @ np.array(
+            [
+                -math.sin(hoop_turn.tilt_direction),
+                math.cos(hoop_turn.tilt_direction),
+                0.0,
+            ]
+        )
+        rotation = _rotation_about(tilt_axis, hoop_turn.tilt) @ rotation
+    turned_pose = hoop_pose.copy()
+    turned_pose[:3, :3] = rotation
+    return Pose(turned_pose)
+
+
 @dataclasses.dataclass(frozen=True, eq=False)
 class StepPlan:
     """One step of the hoop to a path point, planned for its arrival.
 
     Attributes:
         arrival_time: time.monotonic when the robot arrives [s].
-        handle_angle: Handle angle of the step, see RodPlanner.get_hoop_pose
-            [rad].
+        hoop_turn: How the hoop is turned in the step, see HoopTurn.
         hoop_pose: Pose of the hoop to send, in the robot frame.
         joint_angles: Joint angles the robot reaches the pose with [rad].
     """
 
     arrival_time: float
-    handle_angle: float
+    hoop_turn: HoopTurn
     hoop_pose: Pose
     joint_angles: JointConfig
 
@@ -413,7 +460,7 @@ def plan_step(  # noqa: PLR0913
     sent_time: float,
     joint_angles: JointConfig,
     *,
-    handle_angle: float,
+    hoop_turn: HoopTurn,
     can_flip: bool = False,
 ) -> StepPlan:
     """Plans a step to a path point, sent now and aimed at the arrival.
@@ -434,23 +481,23 @@ def plan_step(  # noqa: PLR0913
         index: Path point to move to.
         sent_time: time.monotonic when the step is sent [s].
         joint_angles: Joint angles before the step [rad].
-        handle_angle: Handle angle of the previous step [rad].
+        hoop_turn: How the hoop was turned in the previous step.
         can_flip: True when a joint may change by more than MAX_JOINT_STEP,
             for the move from home to the path.
 
     Raises:
-        NoJointConfigError: No handle angle reaches the point.
+        NoJointConfigError: No hoop turn reaches the point.
         ValueError: The planner cannot give a pose for the point.
     """
     arrival_time = sent_time + control.MOVE_OVERHEAD
     for _ in range(MAX_ARRIVAL_ESTIMATES):
-        chosen_angle, target_angles = choose_handle_angle(
+        chosen_turn, target_angles = choose_hoop_turn(
             planner,
             kinematics,
             index,
             arrival_time,
             joint_angles,
-            previous_angle=handle_angle,
+            previous_turn=hoop_turn,
             can_flip=can_flip,
         )
         move_time = control.get_move_time(
@@ -462,29 +509,32 @@ def plan_step(  # noqa: PLR0913
         arrival_time = next_arrival_time
     return StepPlan(
         arrival_time=arrival_time,
-        handle_angle=chosen_angle,
-        hoop_pose=planner.get_hoop_pose(arrival_time, index, chosen_angle),
+        hoop_turn=chosen_turn,
+        hoop_pose=planner.get_hoop_pose(arrival_time, index, chosen_turn),
         joint_angles=target_angles,
     )
 
 
-def choose_handle_angle(  # noqa: PLR0913
+def choose_hoop_turn(  # noqa: PLR0913
     planner: RodPlanner,
     kinematics: Kinematics,
     index: int,
     time: float,
     joint_angles: JointConfig,
     *,
-    previous_angle: float,
+    previous_turn: HoopTurn,
     can_flip: bool = False,
-) -> tuple[float, JointConfig]:
-    """Returns the handle angle nearest to the previous one that goes.
+) -> tuple[HoopTurn, JointConfig]:
+    """Returns the hoop turn nearest to the previous one that goes.
 
-    The previous angle is tried first, then the angles HANDLE_ANGLE_STEP,
-    twice that and so on away from it, on both sides. An angle goes when a
-    joint configuration within the limits and above the table reaches the
-    pose, the wrist is not near its singularity (MIN_WRIST_BEND) and no
-    joint changes by more than MAX_JOINT_STEP from joint_angles.
+    The previous turn is tried first. Then the handle angles HANDLE_ANGLE_STEP
+    apart on both sides, the tilts of 0 and MAX_TILT and the tilt directions
+    TILT_DIRECTION_STEP apart, ordered by how far they are from the previous
+    turn: the change of the handle angle plus the change of the tilt, plus
+    TILT_CHANGE_COST when the tilt or its direction changes. A turn goes
+    when a joint configuration within the limits and above the table
+    reaches the pose, the wrist is not near its singularity (MIN_WRIST_BEND)
+    and no joint changes by more than MAX_JOINT_STEP from joint_angles.
 
     Args:
         planner: Path of the hoop.
@@ -492,25 +542,24 @@ def choose_handle_angle(  # noqa: PLR0913
         index: Path point.
         time: time.monotonic of the pose [s].
         joint_angles: Joint angles the robot moves from [rad].
-        previous_angle: Handle angle of the previous step [rad].
+        previous_turn: How the hoop was turned in the previous step.
         can_flip: True when the joints may change by more than
             MAX_JOINT_STEP.
 
     Returns:
-        The handle angle, between -pi and pi [rad], and the joint angles for
-        it [rad].
+        The hoop turn and the joint angles for it [rad].
 
     Raises:
-        NoJointConfigError: No handle angle goes, the message gives the
-            reason of the last one tried.
+        NoJointConfigError: No hoop turn goes, the message gives the reason
+            of the last one tried.
         ValueError: The planner cannot give a pose for the point.
     """
+    hoop_pose = planner.get_hoop_pose(time, index)
     last_error: Exception | None = None
-    for handle_angle in _nearest_angles_first(previous_angle):
-        hoop_pose = planner.get_hoop_pose(time, index, handle_angle)
+    for hoop_turn in _nearest_turns_first(previous_turn):
         try:
             target_angles = kinematics.choose_joint_config(
-                hoop_pose, joint_angles
+                turn_hoop(hoop_pose, hoop_turn), joint_angles
             )
             check_wrist_bend(target_angles)
             if not can_flip:
@@ -518,23 +567,91 @@ def choose_handle_angle(  # noqa: PLR0913
         except (NoJointConfigError, JointFlipError) as error:
             last_error = error
             continue
-        return handle_angle, target_angles
+        return hoop_turn, target_angles
     raise NoJointConfigError(
-        f"No handle angle reaches path point {index}: {last_error}"
+        f"No hoop turn reaches path point {index}: {last_error}"
     )
 
 
-def _nearest_angles_first(previous_angle: float) -> Iterator[float]:
-    """Yields all handle angles, nearest to previous_angle first [rad]."""
-    half_turn_steps = round(math.pi / HANDLE_ANGLE_STEP)
-    yield math.remainder(previous_angle, 2 * math.pi)
-    for step_count in range(1, half_turn_steps):
-        for sign in (1, -1):
-            yield math.remainder(
-                previous_angle + sign * step_count * HANDLE_ANGLE_STEP,
+def _nearest_turns_first(previous_turn: HoopTurn) -> Iterator[HoopTurn]:
+    """Yields all hoop turns, nearest to previous_turn first."""
+    is_tilted = previous_turn.tilt > 0.0
+    for handle_steps, tilt, direction_steps in _turn_changes(is_tilted):
+        tilt_direction = (
+            previous_turn.tilt_direction if is_tilted else 0.0
+        ) + direction_steps * TILT_DIRECTION_STEP
+        yield HoopTurn(
+            handle_angle=math.remainder(
+                previous_turn.handle_angle + handle_steps * HANDLE_ANGLE_STEP,
                 2 * math.pi,
-            )
-    yield math.remainder(previous_angle + math.pi, 2 * math.pi)
+            ),
+            tilt=tilt,
+            tilt_direction=math.remainder(tilt_direction, 2 * math.pi)
+            if tilt
+            else 0.0,
+        )
+
+
+@functools.cache
+def _turn_changes(is_tilted: bool) -> tuple[tuple[int, float, int], ...]:
+    """Returns the changes from a turn, the nearest first.
+
+    Each change is the number of HANDLE_ANGLE_STEP to add to the handle
+    angle, the new tilt and the number of TILT_DIRECTION_STEP to add to the
+    tilt direction. Sorted by the cost described in choose_hoop_turn.
+    """
+    half_turn_steps = round(math.pi / HANDLE_ANGLE_STEP)
+    handle_steps = range(-half_turn_steps + 1, half_turn_steps + 1)
+    direction_count = round(2 * math.pi / TILT_DIRECTION_STEP)
+    previous_tilt = MAX_TILT if is_tilted else 0.0
+    tilts = [(0.0, 0)] + [
+        (MAX_TILT, direction_steps)
+        for direction_steps in range(direction_count)
+    ]
+    changes = []
+    for tilt, direction_steps in tilts:
+        is_same_tilt = tilt == previous_tilt and (
+            tilt == 0.0 or direction_steps == 0
+        )
+        tilt_cost = (
+            0.0
+            if is_same_tilt
+            else abs(tilt - previous_tilt) + TILT_CHANGE_COST
+        )
+        for steps in handle_steps:
+            cost = abs(steps) * HANDLE_ANGLE_STEP + tilt_cost
+            changes.append((cost, steps, tilt, direction_steps))
+    changes.sort(key=lambda change: change[0])
+    return tuple(
+        (steps, tilt, direction_steps)
+        for _, steps, tilt, direction_steps in changes
+    )
+
+
+def _rotation_about_z(angle: float) -> NDArray[np.float64]:
+    cosine, sine = math.cos(angle), math.sin(angle)
+    return np.array(
+        [[cosine, -sine, 0.0], [sine, cosine, 0.0], [0.0, 0.0, 1.0]]
+    )
+
+
+def _rotation_about(
+    axis: NDArray[np.float64], angle: float
+) -> NDArray[np.float64]:
+    """Returns the rotation by angle about the unit axis (Rodrigues)."""
+    cross = np.array(
+        [
+            [0.0, -axis[2], axis[1]],
+            [axis[2], 0.0, -axis[0]],
+            [-axis[1], axis[0], 0.0],
+        ]
+    )
+    rotation: NDArray[np.float64] = (
+        np.eye(3)
+        + math.sin(angle) * cross
+        + (1.0 - math.cos(angle)) * cross @ cross
+    )
+    return rotation
 
 
 def _average_neighbours(tangents: PlateDirections3D) -> PlateDirections3D:

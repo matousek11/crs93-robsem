@@ -14,10 +14,13 @@ from hoop_guide.models.hoop_mount import FLANGE_TO_HOOP
 from hoop_guide.planning import ARRIVAL_TOLERANCE
 from hoop_guide.planning import HANDLE_ANGLE_STEP
 from hoop_guide.planning import MAX_JOINT_STEP
+from hoop_guide.planning import MAX_TILT
 from hoop_guide.planning import MIN_WRIST_BEND
 from hoop_guide.planning import PATH_STEP
 from hoop_guide.planning import SYNC_DISTANCE
+from hoop_guide.planning import TILT_DIRECTION_STEP
 from hoop_guide.planning import WRIST_BEND_JOINT
+from hoop_guide.planning import HoopTurn
 from hoop_guide.planning import JointFlipError
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import Planning
@@ -25,8 +28,9 @@ from hoop_guide.planning import RodPlanner
 from hoop_guide.planning import WristSingularityError
 from hoop_guide.planning import check_joint_step
 from hoop_guide.planning import check_wrist_bend
-from hoop_guide.planning import choose_handle_angle
+from hoop_guide.planning import choose_hoop_turn
 from hoop_guide.planning import plan_step
+from hoop_guide.planning import turn_hoop
 from hoop_guide.plate import PlatePose
 from hoop_guide.rods import STOP_HEIGHT
 from hoop_guide.rods import Puzzle
@@ -512,7 +516,9 @@ def angles_toward_base():
 def test_handle_angle_turns_the_handle_about_the_rod():
     planner = make_planner()
 
-    hoop_pose = planner.get_hoop_pose(0.0, 3, math.pi / 2)
+    hoop_pose = planner.get_hoop_pose(
+        0.0, 3, HoopTurn(handle_angle=math.pi / 2)
+    )
 
     # The rod points down, a quarter turn moves the handle from the robot
     # to its left.
@@ -523,25 +529,26 @@ def test_handle_angle_turns_the_handle_about_the_rod():
     )
 
 
-def test_handle_angle_zero_is_the_pose_of_update():
+def test_no_hoop_turn_is_the_pose_of_update():
     planner = make_planner(Puzzle.B, TURNING_TABLE)
 
     np.testing.assert_allclose(
-        planner.get_hoop_pose(1.5, 4, 0.0), planner.update(1.5, 4)[0]
+        planner.get_hoop_pose(1.5, 4, HoopTurn()), planner.update(1.5, 4)[0]
     )
 
 
 def test_previous_handle_angle_is_kept_while_it_goes():
-    angle, _ = choose_handle_angle(
+    turn, _ = choose_hoop_turn(
         make_planner(),
         FakeKinematics(),
         3,
         0.0,
         angles_toward_base(),
-        previous_angle=0.3,
+        previous_turn=HoopTurn(handle_angle=0.3),
     )
 
-    assert angle == pytest.approx(0.3)
+    assert turn.handle_angle == pytest.approx(0.3)
+    assert turn.tilt == 0.0
 
 
 def test_nearest_handle_angle_that_goes_is_chosen():
@@ -550,16 +557,18 @@ def test_nearest_handle_angle_that_goes_is_chosen():
     def is_reachable(pose):
         return handle(pose) @ TOWARD_BASE < math.cos(1.5 * HANDLE_ANGLE_STEP)
 
-    angle, joint_angles = choose_handle_angle(
+    turn, joint_angles = choose_hoop_turn(
         make_planner(),
         FakeKinematics(is_reachable),
         3,
         0.0,
         angles_toward_base(),
-        previous_angle=0.0,
+        previous_turn=HoopTurn(),
     )
 
-    assert abs(angle) == pytest.approx(2 * HANDLE_ANGLE_STEP)
+    # A turn of the handle is tried before a tilt.
+    assert abs(turn.handle_angle) == pytest.approx(2 * HANDLE_ANGLE_STEP)
+    assert turn.tilt == 0.0
     assert joint_angles[0] > -1.0
 
 
@@ -569,40 +578,45 @@ def test_handle_angle_that_flips_a_joint_is_skipped():
     far_angles = JointConfig(np.full(6, 5.0))
 
     with pytest.raises(NoJointConfigError, match="would turn by"):
-        choose_handle_angle(
-            make_planner(), kinematics, 3, 0.0, far_angles, previous_angle=0.0
+        choose_hoop_turn(
+            make_planner(),
+            kinematics,
+            3,
+            0.0,
+            far_angles,
+            previous_turn=HoopTurn(handle_angle=0.0),
         )
 
-    assert len(kinematics.tried_handles) == round(
-        2 * math.pi / HANDLE_ANGLE_STEP
-    )
+    handle_angle_count = round(2 * math.pi / HANDLE_ANGLE_STEP)
+    tilt_count = 1 + round(2 * math.pi / TILT_DIRECTION_STEP)
+    assert len(kinematics.tried_handles) == handle_angle_count * tilt_count
 
 
 def test_flip_is_allowed_when_asked():
     far_angles = JointConfig(np.full(6, 5.0))
 
-    angle, _ = choose_handle_angle(
+    turn, _ = choose_hoop_turn(
         make_planner(),
         FakeKinematics(),
         3,
         0.0,
         far_angles,
-        previous_angle=0.0,
+        previous_turn=HoopTurn(),
         can_flip=True,
     )
 
-    assert angle == pytest.approx(0.0)
+    assert turn == HoopTurn()
 
 
 def test_no_handle_angle_that_goes_raises_with_the_last_reason():
-    with pytest.raises(NoJointConfigError, match="No handle angle.*point 3"):
-        choose_handle_angle(
+    with pytest.raises(NoJointConfigError, match="No hoop turn.*point 3"):
+        choose_hoop_turn(
             make_planner(),
             FakeKinematics(lambda pose: False),
             3,
             0.0,
             angles_toward_base(),
-            previous_angle=0.0,
+            previous_turn=HoopTurn(handle_angle=0.0),
         )
 
 
@@ -615,14 +629,14 @@ def test_step_is_aimed_at_the_plate_when_the_robot_arrives():
         0,
         5.0,
         angles_toward_base(),
-        handle_angle=0.0,
+        hoop_turn=HoopTurn(),
     )
 
     # Fast fake joints: the arrival is MOVE_OVERHEAD after sending.
     assert step.arrival_time == pytest.approx(5.0 + MOVE_OVERHEAD, abs=1e-3)
     np.testing.assert_allclose(
         step.hoop_pose,
-        planner.get_hoop_pose(step.arrival_time, 0, step.handle_angle),
+        planner.get_hoop_pose(step.arrival_time, 0, step.hoop_turn),
     )
 
 
@@ -656,16 +670,16 @@ def test_handle_angle_with_the_wrist_near_its_singularity_is_skipped():
         )
         return 0.0 if is_toward_base else 1.0
 
-    angle, joint_angles = choose_handle_angle(
+    turn, joint_angles = choose_hoop_turn(
         make_planner(),
         FakeKinematics(wrist_bend=wrist_bend),
         3,
         0.0,
         angles_toward_base(),
-        previous_angle=0.0,
+        previous_turn=HoopTurn(),
     )
 
-    assert abs(angle) == pytest.approx(HANDLE_ANGLE_STEP)
+    assert abs(turn.handle_angle) == pytest.approx(HANDLE_ANGLE_STEP)
     assert joint_angles[WRIST_BEND_JOINT] == pytest.approx(1.0)
 
 
@@ -703,7 +717,7 @@ def plan_slow_step(scale):
         1,
         0.0,
         start_angles,
-        handle_angle=0.0,
+        hoop_turn=HoopTurn(),
         can_flip=True,
     )
     return step, start_angles, kinematics
@@ -727,6 +741,62 @@ def test_step_whose_arrival_does_not_settle_uses_the_last_estimate():
     np.testing.assert_allclose(
         step.hoop_pose,
         make_planner(table_motion=TURNING_TABLE).get_hoop_pose(
-            step.arrival_time, 1, step.handle_angle
+            step.arrival_time, 1, step.hoop_turn
         ),
     )
+
+
+# hoop tilt
+
+
+def test_tilt_turns_the_hoop_axis_toward_the_direction_about_its_center():
+    hoop_pose = make_planner().get_hoop_pose(0.0, 3)
+
+    tilted = turn_hoop(hoop_pose, HoopTurn(tilt=MAX_TILT, tilt_direction=0.0))
+
+    # Toward the handle, which points to the robot base.
+    expected_axis = math.cos(MAX_TILT) * np.array(DOWN) + math.sin(
+        MAX_TILT
+    ) * np.array(TOWARD_BASE)
+    np.testing.assert_allclose(hoop_axis(tilted), expected_axis, atol=1e-12)
+    np.testing.assert_allclose(position(tilted), position(hoop_pose))
+    np.testing.assert_allclose(
+        tilted[:3, :3].T @ tilted[:3, :3], np.eye(3), atol=1e-12
+    )
+
+
+def test_tilt_is_chosen_when_no_handle_angle_goes():
+    # Only a hoop axis tilted from the rod is reachable.
+    def is_reachable(pose):
+        return hoop_axis(pose) @ DOWN < math.cos(0.5 * MAX_TILT)
+
+    turn, _ = choose_hoop_turn(
+        make_planner(),
+        FakeKinematics(is_reachable),
+        3,
+        0.0,
+        angles_toward_base(),
+        previous_turn=HoopTurn(),
+    )
+
+    assert turn.tilt == pytest.approx(MAX_TILT)
+    assert turn.handle_angle == pytest.approx(0.0)
+
+
+def test_tilt_and_its_direction_are_kept_while_they_go():
+    previous_turn = HoopTurn(
+        handle_angle=0.2, tilt=MAX_TILT, tilt_direction=TILT_DIRECTION_STEP
+    )
+
+    turn, _ = choose_hoop_turn(
+        make_planner(),
+        FakeKinematics(),
+        3,
+        0.0,
+        angles_toward_base(),
+        previous_turn=previous_turn,
+    )
+
+    assert turn.tilt == pytest.approx(MAX_TILT)
+    assert turn.tilt_direction == pytest.approx(TILT_DIRECTION_STEP)
+    assert turn.handle_angle == pytest.approx(0.2)
