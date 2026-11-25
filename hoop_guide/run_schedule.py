@@ -18,6 +18,7 @@ import math
 
 import numpy as np
 
+from hoop_guide.planning import AIM_AHEAD
 from hoop_guide.planning import HoopTurn
 from hoop_guide.planning import Kinematics
 from hoop_guide.planning import NoJointConfigError
@@ -44,6 +45,13 @@ the simulation reaches it [s]."""
 # From the third test of 2026-11-24, 55 steps: real time = move time +
 # 0.24 s, MOVE_OVERHEAD already covers it.
 READY_FLAG_DELAY = 0.0
+
+# Measured on 2026-11-25: 53 ms between the steps on the rod, 0 ms between
+# the steps at the synchronization point, which have no check. Left out of
+# the simulation, it made the runs fall up to 1.8 s behind it.
+ROD_CHECK_TIME = 0.053
+"""Time the check of an arrived step on the rod takes before the next step
+is sent, see PuzzleMode._log_check [s]."""
 """Time from the robot arriving to the controller reporting it ready [s]."""
 
 JOINT_MARGIN_TOLERANCE = math.radians(2.0)
@@ -195,7 +203,7 @@ def _simulate_run(
         )
         steps.append(step)
         margin = min(margin, step_margin)
-        time = step.arrival_time + READY_FLAG_DELAY
+        time = step.arrival_time + READY_FLAG_DELAY + ROD_CHECK_TIME
         angles, turn = step.joint_angles, step.hoop_turn
 
     try:
@@ -241,7 +249,7 @@ def _simulate_step(  # noqa: PLR0913, PLR0917
     joint_margin = _get_joint_margin(step.joint_angles, kinematics.joint_limits)
     for time_offset in (-TIME_MARGIN, TIME_MARGIN):
         nearby_pose = planner.get_hoop_pose(
-            step.arrival_time + time_offset, index, step.hoop_turn
+            step.arrival_time + AIM_AHEAD + time_offset, index, step.hoop_turn
         )
         nearby_angles = kinematics.choose_joint_config(
             nearby_pose, joint_angles
