@@ -7,8 +7,11 @@ from hypothesis import settings
 from hypothesis import strategies as st
 
 from hoop_guide.control import MOVE_OVERHEAD
+from hoop_guide.control import get_lead_time
+from hoop_guide.control import get_move_time
 from hoop_guide.estimation import TableMotion
 from hoop_guide.models.hoop_mount import FLANGE_TO_HOOP
+from hoop_guide.planning import ARRIVAL_TOLERANCE
 from hoop_guide.planning import HANDLE_ANGLE_STEP
 from hoop_guide.planning import MAX_JOINT_STEP
 from hoop_guide.planning import MIN_WRIST_BEND
@@ -664,3 +667,66 @@ def test_handle_angle_with_the_wrist_near_its_singularity_is_skipped():
 
     assert abs(angle) == pytest.approx(HANDLE_ANGLE_STEP)
     assert joint_angles[WRIST_BEND_JOINT] == pytest.approx(1.0)
+
+
+class SlowKinematics(FakeKinematics):
+    """Joint configuration is a multiple of the hoop position, joints are slow.
+
+    A step then takes seconds and its target moves with the plate meanwhile.
+
+    Args:
+        scale: Joint angle per meter of the hoop position [rad/m].
+    """
+
+    def __init__(self, scale=10.0):
+        super().__init__()
+        self._scale = scale
+
+    @property
+    def joint_speeds(self):
+        return JointSpeeds(np.full(6, 1.0))
+
+    def choose_joint_config(self, hoop_pose, joint_angles):
+        position = self._scale * hoop_pose[:3, 3]
+        return JointConfig(np.r_[position, 0.0, 1.0, 0.0])
+
+
+def plan_slow_step(scale):
+    planner = make_planner(table_motion=TURNING_TABLE)
+    kinematics = SlowKinematics(scale)
+    start_angles = kinematics.choose_joint_config(
+        planner.get_hoop_pose(0.0, 0), JointConfig(np.zeros(6))
+    )
+    step = plan_step(
+        planner,
+        kinematics,
+        1,
+        0.0,
+        start_angles,
+        handle_angle=0.0,
+        can_flip=True,
+    )
+    return step, start_angles, kinematics
+
+
+def test_long_step_is_aimed_at_where_the_target_is_when_it_arrives():
+    step, start_angles, kinematics = plan_slow_step(scale=10.0)
+
+    lead_time = get_lead_time(
+        get_move_time(start_angles, step.joint_angles, kinematics.joint_speeds)
+    )
+    assert step.arrival_time > 1.0
+    assert step.arrival_time == pytest.approx(lead_time, abs=ARRIVAL_TOLERANCE)
+
+
+def test_step_whose_arrival_does_not_settle_uses_the_last_estimate():
+    # The joints are so slow that every estimate moves the arrival by more
+    # than the tolerance.
+    step, _, _ = plan_slow_step(scale=1000.0)
+
+    np.testing.assert_allclose(
+        step.hoop_pose,
+        make_planner(table_motion=TURNING_TABLE).get_hoop_pose(
+            step.arrival_time, 1, step.handle_angle
+        ),
+    )

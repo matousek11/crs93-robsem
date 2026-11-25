@@ -1,4 +1,5 @@
 import math
+import re
 
 import numpy as np
 import pytest
@@ -91,20 +92,45 @@ class FakeClock:
 
 
 class FakeFrames:
-    """Camera with a new frame every FRAME_PERIOD of the fake clock."""
+    """Camera with a new frame every FRAME_PERIOD of the fake clock.
 
-    def __init__(self, clock, is_plate_visible=True):
+    Args:
+        clock: Fake clock.
+        is_plate_visible: False for frames without the plate.
+        plate_hidden_after: From this time the plate is not in the frames
+            [s], None for never.
+        frames_stop_after: From this time there is no frame [s], None for
+            never.
+    """
+
+    def __init__(
+        self,
+        clock,
+        is_plate_visible=True,
+        plate_hidden_after=None,
+        frames_stop_after=None,
+    ):
         self._clock = clock
         self._is_plate_visible = is_plate_visible
+        self._plate_hidden_after = plate_hidden_after
+        self._frames_stop_after = frames_stop_after
 
     @property
     def latest(self):
-        timestamp = (
-            math.floor(self._clock.time / FRAME_PERIOD + 1e-9) * FRAME_PERIOD
+        now = self._clock.time
+        if (
+            self._frames_stop_after is not None
+            and now > self._frames_stop_after
+        ):
+            return None
+        is_hidden = (
+            self._plate_hidden_after is not None
+            and now > self._plate_hidden_after
         )
+        timestamp = math.floor(now / FRAME_PERIOD + 1e-9) * FRAME_PERIOD
         markers = (
             (plate_marker(plate_pose_at(timestamp)),)
-            if self._is_plate_visible
+            if self._is_plate_visible and not is_hidden
             else ()
         )
         return Frame(IMAGE, timestamp, markers)
@@ -153,6 +179,9 @@ class FakeMotion:
 
     def get_joint_angles(self):
         return self._joint_angles
+
+    def get_hoop_pose(self):
+        return self.moves[-1][1].copy()
 
     def choose_joint_config(self, hoop_pose, joint_angles):
         if not self._is_reachable_in_search(hoop_pose, self._clock.time):
@@ -247,6 +276,8 @@ class Run:
         start_joint_angles=None,
         has_camera=True,
         is_plate_visible=True,
+        plate_hidden_after=None,
+        frames_stop_after=None,
         homography=IDENTITY,
         plate_height=PLATE_HEIGHT,
     ):
@@ -262,7 +293,14 @@ class Run:
         self.keyboard = FakeKeyboard(self.clock, timed_keys)
         self.reporter = FakeReporter()
         frames = (
-            FakeFrames(self.clock, is_plate_visible) if has_camera else None
+            FakeFrames(
+                self.clock,
+                is_plate_visible,
+                plate_hidden_after,
+                frames_stop_after,
+            )
+            if has_camera
+            else None
         )
         self.mode = PuzzleMode(
             self.motion,
@@ -515,6 +553,57 @@ def test_joint_angles_of_every_step_are_logged(caplog):
     ]
     assert step_messages
     assert all("joints [" in message for message in step_messages)
+
+
+def test_simulated_run_is_logged_step_by_step(caplog):
+    with caplog.at_level("INFO", logger="hoop_guide.puzzle_mode"):
+        complete_run()
+
+    messages = [r.getMessage() for r in caplog.records]
+    simulated = [m for m in messages if m.startswith("Simulated step")]
+    assert simulated
+    assert any(m.startswith("Simulated run:") for m in messages)
+
+
+def test_every_step_on_the_rod_is_checked_in_the_log(caplog):
+    with caplog.at_level("INFO", logger="hoop_guide.puzzle_mode"):
+        complete_run()
+
+    messages = [r.getMessage() for r in caplog.records]
+    checks = [m for m in messages if m.startswith("Check ")]
+    steps_on_rod = [
+        m for m in messages if re.match(r"Step to path point [1-9]", m)
+    ]
+    assert len(checks) >= len(steps_on_rod) > 0
+    assert all("mm off the rod" in m for m in checks)
+    assert any("against the simulation" in m for m in checks)
+    assert any("off the prediction" in m for m in checks)
+
+
+@pytest.mark.parametrize(
+    ("camera_option", "expected"),
+    [
+        ("plate_hidden_after", "plate not seen"),
+        ("frames_stop_after", "no camera frame"),
+    ],
+    ids=["plate_hidden", "no_frames"],
+)
+def test_check_says_when_the_camera_cannot_see_the_plate(
+    caplog, camera_option, expected
+):
+    with caplog.at_level("INFO", logger="hoop_guide.puzzle_mode"):
+        run_puzzle(
+            timed_keys=[(ENTER_TIME, Key.ENTER)],
+            **{camera_option: ENTER_TIME},
+        )
+
+    checks = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("Check ")
+    ]
+    assert checks
+    assert all(expected in check for check in checks)
 
 
 def test_without_a_safe_start_the_hoop_stays_at_the_sync_point():

@@ -34,6 +34,7 @@ hoop_guide/              # main package
 ├── collision.py         # robot and hoop above the table
 ├── control.py           # tracking loop, step timing
 ├── run_schedule.py      # start time of a run, found by simulating the whole run
+├── run_check.py         # how far a run is from the predictions, for the log
 ├── camera_stream.py     # background thread: grab, timestamp, process, keep the latest Frame
 ├── models/              # physical parts the robot works with
 │   └── hoop_mount.py    # transform between the flange and the hoop center

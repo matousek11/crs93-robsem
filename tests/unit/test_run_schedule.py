@@ -12,7 +12,8 @@ from hoop_guide.plate import PlatePose
 from hoop_guide.rods import Puzzle
 from hoop_guide.run_schedule import EARLIEST_START
 from hoop_guide.run_schedule import SEARCH_WINDOW
-from hoop_guide.run_schedule import find_start_time
+from hoop_guide.run_schedule import RunPhase
+from hoop_guide.run_schedule import find_run_schedule
 from hoop_guide.types import JointConfig
 from hoop_guide.types import JointSpeeds
 
@@ -84,10 +85,16 @@ def planner_with_plate_at(angle):
     return RodPlanner(Puzzle.A1, motion, PLATE_HEIGHT)
 
 
-def search(planner, kinematics, now=0.0):
+def find_schedule(planner, kinematics, now=0.0):
     sync_pose = planner.update(now, 0)[0]
     joint_angles = JointConfig(np.r_[sync_pose[:3, 3], 0.0, 1.0, 0.0])
-    return find_start_time(planner, kinematics, joint_angles, 0.0, now)
+    return find_run_schedule(planner, kinematics, joint_angles, 0.0, now)
+
+
+def search(planner, kinematics, now=0.0):
+    """Start time of the chosen run, None when there is none."""
+    schedule = find_schedule(planner, kinematics, now)
+    return None if schedule is None else schedule.start_time
 
 
 def is_far_or_high(pose):
@@ -192,3 +199,20 @@ def test_start_keeps_the_wrist_farthest_from_its_singularity():
 
     assert start_time is not None
     assert start_time > 5.0
+
+
+def test_schedule_goes_down_waits_at_the_bottom_and_goes_up_in_time():
+    planner = planner_with_plate_at(0.0)
+
+    schedule = find_schedule(planner, FakeKinematics())
+
+    phases = [step.phase for step in schedule.steps]
+    last_index = planner.point_count - 1
+    down = [s.index for s in schedule.steps if s.phase is RunPhase.DOWN]
+    up = [s.index for s in schedule.steps if s.phase is RunPhase.UP]
+    assert down == list(range(1, last_index + 1))
+    assert up == list(range(last_index - 1, -1, -1))
+    assert phases.index(RunPhase.BOTTOM) == len(down)
+    assert schedule.steps[0].sent_time == pytest.approx(schedule.start_time)
+    for earlier, later in zip(schedule.steps, schedule.steps[1:], strict=False):
+        assert earlier.sent_time < earlier.arrival_time <= later.sent_time
