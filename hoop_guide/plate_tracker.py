@@ -7,7 +7,13 @@ from hoop_guide.plate import estimate_plate_pose
 from hoop_guide.types import Homography
 from hoop_guide.vision import Frame
 
-PLATE_SAMPLE_COUNT = 50
+# The camera gives about 4.3 frames per second, so 100 frames take about
+# 23 s. In the lab on 2026-11-25, 50 frames (11.5 s) gave the angular
+# velocity 0.5 to 3 % off, the plate was up to 14 deg off its prediction
+# 40 s later, when the run ends. The error of the fitted slope falls with
+# the measured time to the power of 1.5, so 23 s give it about 3 times
+# smaller.
+PLATE_SAMPLE_COUNT = 100
 """Number of plate poses the table motion is fitted to."""
 
 # TODO: measure in the lab.

@@ -63,7 +63,7 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 ## Puzzle mode
 
 1. Checks that the camera and a saved homography are there, otherwise nothing moves. The height of the plate is `PLATE_HEIGHT` in `hoop_guide/plate.py`.
-2. Measures the table motion from the first 50 frames with the plate, right at the start. The arm must not hide the markers. Without the plate for 15 s the mode ends.
+2. Measures the table motion from the first 100 frames with the plate, about 23 s right at the start. A shorter measurement gave the angular velocity a few percent off, which made the plate up to 14° off its prediction at the end of a run. The arm must not hide the markers. When the frames are not collected within 35 s the mode ends.
 3. Moves the hoop to the synchronization point, 10 cm above the free end of the rod, and follows the rotation there.
 4. Enter simulates the whole run down the rod and back for starts in the next 30 s and picks the one that keeps the joints farthest from their limits. Starts are tried only from 1.5 times the time the previous search took (10 s before the first search), so the search ends before them. The hoop follows the synchronization point until the start. Without such a start, or when the search took longer and the start has passed, a warning is shown and Enter searches again.
 5. At the start the hoop goes down the rod point by point, every step planned again from the real time and joint angles.

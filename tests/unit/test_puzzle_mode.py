@@ -45,7 +45,9 @@ ANGULAR_VELOCITY = 0.2  # [rad/s]
 MOVING_CHECKS = 15
 SYNC_HEIGHT = PLATE_HEIGHT + 0.2 + SYNC_DISTANCE
 BOTTOM_HEIGHT = PLATE_HEIGHT + STOP_HEIGHT
-ENTER_TIME = 8.0  # after the measurement of about 5 s [s]
+# One turn of the table after 8 s, so the plate is where the tests expect
+# it and the measurement of PLATE_SAMPLE_COUNT frames is over [s].
+ENTER_TIME = 8.0 + 2 * math.pi / ANGULAR_VELOCITY
 # The first search ends at once on the fake clock, but the earliest start is
 # where the expected search time puts it.
 FIRST_START_DELAY = SEARCH_TIME_MARGIN * INITIAL_SEARCH_TIME  # [s]

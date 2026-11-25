@@ -35,8 +35,12 @@ from hoop_guide.vision import Frame
 logger = logging.getLogger(__name__)
 
 
-MEASUREMENT_TIMEOUT = 15.0
-"""Longest wait for the frames the table motion is measured from [s]."""
+MEASUREMENT_TIMEOUT = 35.0
+"""Longest wait for the frames the table motion is measured from [s].
+
+PLATE_SAMPLE_COUNT frames take about 23 s, the rest is for frames where
+the markers are hidden.
+"""
 
 FRAME_POLL_PERIOD = 0.02
 """Time between two looks for a new camera frame [s]."""
