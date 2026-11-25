@@ -6,11 +6,11 @@ import pytest
 from hoop_guide.estimation import TableMotion
 from hoop_guide.planning import MIN_WRIST_BEND
 from hoop_guide.planning import WRIST_BEND_JOINT
+from hoop_guide.planning import HoopTurn
 from hoop_guide.planning import NoJointConfigError
 from hoop_guide.planning import RodPlanner
 from hoop_guide.plate import PlatePose
 from hoop_guide.rods import Puzzle
-from hoop_guide.run_schedule import EARLIEST_START
 from hoop_guide.run_schedule import SEARCH_WINDOW
 from hoop_guide.run_schedule import RunPhase
 from hoop_guide.run_schedule import find_run_schedule
@@ -22,6 +22,7 @@ LOW = PLATE_HEIGHT + 0.1  # points below this are "low" in the rules [m]
 ROTATION_CENTER = (0.40, 0.0)  # [m]
 ROTATION_RADIUS = 0.06  # [m]
 ANGULAR_VELOCITY = 0.2  # [rad/s]
+START_DELAY = 3.0  # time the search is given before the earliest start [s]
 NEAR_X = 0.40  # the rules make points nearer to the robot unreachable [m]
 
 
@@ -88,7 +89,14 @@ def planner_with_plate_at(angle):
 def find_schedule(planner, kinematics, now=0.0):
     sync_pose = planner.update(now, 0)[0]
     joint_angles = JointConfig(np.r_[sync_pose[:3, 3], 0.0, 1.0, 0.0])
-    return find_run_schedule(planner, kinematics, joint_angles, 0.0, now)
+    return find_run_schedule(
+        planner,
+        kinematics,
+        joint_angles,
+        HoopTurn(),
+        now=now,
+        earliest_start=now + START_DELAY,
+    )
 
 
 def search(planner, kinematics, now=0.0):
@@ -104,7 +112,7 @@ def is_far_or_high(pose):
 def test_run_that_goes_through_starts_as_early_as_allowed():
     start_time = search(planner_with_plate_at(0.0), FakeKinematics(), now=3.0)
 
-    assert start_time == pytest.approx(3.0 + EARLIEST_START)
+    assert start_time == pytest.approx(3.0 + START_DELAY)
 
 
 def test_start_keeps_the_run_farthest_from_a_joint_limit():
@@ -128,7 +136,7 @@ def test_start_keeps_the_run_farthest_from_a_joint_limit():
 def test_equally_good_starts_give_the_earliest():
     start_time = search(planner_with_plate_at(math.pi / 2), FakeKinematics())
 
-    assert start_time == pytest.approx(EARLIEST_START)
+    assert start_time == pytest.approx(START_DELAY)
 
 
 def test_start_waits_until_the_plate_turns_away_from_the_robot():
@@ -139,7 +147,7 @@ def test_start_waits_until_the_plate_turns_away_from_the_robot():
     start_time = search(planner, FakeKinematics(is_far_or_high))
 
     assert start_time is not None
-    assert EARLIEST_START < start_time <= SEARCH_WINDOW
+    assert START_DELAY < start_time <= SEARCH_WINDOW
     plate_x_at_start = planner.update(start_time, 0)[0][0, 3]
     assert plate_x_at_start > NEAR_X - ROTATION_RADIUS
 
@@ -176,7 +184,7 @@ def test_start_is_found_by_turning_the_handle_away_from_the_robot():
         planner_with_plate_at(0.0), FakeKinematics(is_reachable)
     )
 
-    assert start_time == pytest.approx(EARLIEST_START)
+    assert start_time == pytest.approx(START_DELAY)
 
 
 def test_wrist_near_its_singularity_on_the_rod_gives_no_start():
