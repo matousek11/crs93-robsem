@@ -301,7 +301,9 @@ class RodPlanner:
     In a hoop pose the z axis is the tangent of the rod, pointing toward the
     plate. The x axis points along the handle, as close to the robot base as
     the z axis allows: the level direction from the hoop center to the robot
-    z axis with its part along the z axis removed.
+    z axis with its part along the z axis removed. For rod D the handle
+    points along the plate y axis, avoiding the undefined base direction
+    at the horizontal free tip.
 
     Args:
         puzzle: Rod to go through.
@@ -321,6 +323,7 @@ class RodPlanner:
             raise ValueError("Plate height must be finite.")
         self._table_motion = table_motion
         self._plate_height = plate_height
+        self._puzzle = puzzle
         rod_points, rod_tangents = rod_centerline(puzzle, PATH_STEP)
         points, tangents = _cut_at_stop_height(
             rod_points, _average_neighbours(rod_tangents)
@@ -397,10 +400,19 @@ class RodPlanner:
             PlateDirections3D(self._tangents[start_index:stop_index]), plate
         )
         hoop_poses = []
+        plate_y = (
+            np.array([-math.sin(plate.heading), math.cos(plate.heading), 0.0])
+            if self._puzzle is Puzzle.D
+            else None
+        )
         for offset, (point, tangent) in enumerate(
             zip(points, tangents, strict=True)
         ):
-            handle = _handle_toward_base(point, tangent)
+            handle = (
+                plate_y
+                if plate_y is not None
+                else _handle_toward_base(point, tangent)
+            )
             if handle is None:
                 raise ValueError(
                     "Handle cannot point toward the robot base at path point"

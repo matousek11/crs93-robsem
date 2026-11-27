@@ -51,7 +51,7 @@ Every run creates a folder `runs/<date_time>/` with `app.log`. Everything the ap
 
 | Option | What it does | Why |
 |---|---|---|
-| A1, A2, B, C | Runs the puzzle mode, see below. Only with the real robot. D is not offered yet, its rod has no model. | One mode per puzzle variant, from the easiest to the hardest. |
+| A1, A2, B, C, D | Runs the puzzle mode, see below. Only with the real robot. | One mode per puzzle variant, from the easiest to the hardest. |
 | Soft home | Moves the robot to the home position. | Return to a known position, e.g. after stopping a mode. |
 | Release | Engages the brakes and disconnects feedback. Wait until the robot stops and do not use it above the work surface, the arm can slightly drop. | Required before entering the safety cage. |
 | Reset motors | Resets motors in an error state. | Recovery after a motor error (flashing green and red LED). |
@@ -64,7 +64,7 @@ Soft home, Release and Reset motors are blocked with the virtual robot, they nee
 
 1. Checks that the camera and a saved homography are there, otherwise nothing moves. The height of the plate is `PLATE_HEIGHT` in `hoop_guide/plate.py`.
 2. Measures the table motion from the first 100 frames with the plate, about 23 s right at the start. A shorter measurement gave the angular velocity a few percent off, which made the plate up to 14° off its prediction at the end of a run. The arm must not hide the markers. When the frames are not collected within 35 s the mode ends.
-3. Moves the hoop to the synchronization point, 10 cm above the free end of the rod, and follows the rotation there.
+3. Moves the hoop to the synchronization point, 10 cm outward along the free end tangent (sideways for D), and follows the rotation there.
 4. Enter simulates the whole run down the rod and back for starts in the next 30 s and picks the one that keeps the joints farthest from their limits. Starts are tried only from 1.5 times the time the previous search took (10 s before the first search), so the search ends before them. The hoop follows the synchronization point until the start. Without such a start, or when the search took longer and the start has passed, a warning is shown and Enter searches again.
 5. At the start the hoop goes down the rod point by point, every step planned again from the real time and joint angles.
 6. At 4 cm above the plate the hoop follows the rotation for 1 s.
@@ -80,7 +80,7 @@ To compare the simulation with the real run, the log also has:
   - how much later (+) or earlier (−) the step was sent than in the simulation,
   - how far the plate seen by the camera is from its prediction, in millimeters and degrees, and which markers the camera sees.
 
-The handle points toward the robot base and the hoop axis follows the rod at the start. Every step keeps the turn of the hoop of the previous one when the robot can reach the point with it. Otherwise it tries other handle angles 10° apart and a tilt of the hoop axis by 10° from the rod in 8 directions, ordered by how far they are from the previous turn, a change of the tilt counting as 15° more. A tilt of 10° costs about 1.4 mm of the clearance between the rod and the hoop. A turn goes when the joints are within their limits, above the table, joint 5 is at least 10° from zero (at zero the wrist is in its singularity and joints 4 and 6 turn far for a small move) and none turns by more than 45° in the step, a larger turn would mean the arm swings into another joint configuration with the hoop on the rod. When no turn goes, the hoop goes back out of the rod. Only the first move from home to the synchronization point may turn the joints further. The start search simulates the same choice.
+The handle points toward the robot base and the hoop axis follows the rod at the start. For rod D the initial tangent is horizontal and can point directly at the robot base, so the handle follows the plate y axis instead, keeping the orientation continuous around the curved bend. Every step keeps the turn of the hoop of the previous one when the robot can reach the point with it. Otherwise it tries other handle angles 10° apart and a tilt of the hoop axis by 10° from the rod in 8 directions, ordered by how far they are from the previous turn, a change of the tilt counting as 15° more. A tilt of 10° costs about 1.4 mm of the clearance between the rod and the hoop. A turn goes when the joints are within their limits, above the table, joint 5 is at least 10° from zero (at zero the wrist is in its singularity and joints 4 and 6 turn far for a small move) and none turns by more than 45° in the step, a larger turn would mean the arm swings into another joint configuration with the hoop on the rod. When no turn goes, the hoop goes back out of the rod. Only the first move from home to the synchronization point may turn the joints further. The start search simulates the same choice.
 
 ## Table check
 

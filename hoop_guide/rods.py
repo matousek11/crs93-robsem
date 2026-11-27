@@ -30,12 +30,44 @@ class Puzzle(enum.Enum):
     D = "D"
 
 
+# Puzzle D: drawing dimensions, in the plate X/Z plane [m].
+_D_BEND_RADIUS = 0.050
+_D_TOP_STRAIGHT = 0.050
+_D_UPPER_VERTICAL = 0.060
+_D_LOWER_VERTICAL = 0.030
+_D_DIAGONAL_OFFSET = 0.015
+_D_ARC_SEGMENTS = 18  # Five-degree chords, at most 0.05 mm arc deviation.
+
+
+def _rod_d_vertices() -> tuple[tuple[float, float, float], ...]:
+    """Returns the 90-degree curved rod D from its free tip to the plate."""
+    arc_center_x = _D_BEND_RADIUS - _D_DIAGONAL_OFFSET
+    arc_center_z = _D_LOWER_VERTICAL + _D_DIAGONAL_OFFSET + _D_UPPER_VERTICAL
+    arc_angles = np.linspace(math.pi / 2, math.pi, _D_ARC_SEGMENTS + 1)
+    arc = tuple(
+        (
+            arc_center_x + _D_BEND_RADIUS * math.cos(angle),
+            0.0,
+            arc_center_z + _D_BEND_RADIUS * math.sin(angle),
+        )
+        for angle in arc_angles[1:]
+    )
+    return (
+        (arc_center_x + _D_TOP_STRAIGHT, 0.0, arc_center_z + _D_BEND_RADIUS),
+        (arc_center_x, 0.0, arc_center_z + _D_BEND_RADIUS),
+        *arc,
+        (-_D_DIAGONAL_OFFSET, 0.0, _D_LOWER_VERTICAL + _D_DIAGONAL_OFFSET),
+        (0.0, 0.0, _D_LOWER_VERTICAL),
+        (0.0, 0.0, 0.0),
+    )
+
+
 _STRAIGHT_ROD = (
     (0.0, 0.0, 0.200),
     (0.0, 0.0, 0.000),
 )
 
-"""Top to down rod trajectories"""
+"""Rod trajectories from the free tip toward the plate."""
 _ROD_VERTICES: dict[Puzzle, tuple[tuple[float, float, float], ...]] = {
     Puzzle.A1: _STRAIGHT_ROD,
     Puzzle.A2: _STRAIGHT_ROD,
@@ -52,6 +84,7 @@ _ROD_VERTICES: dict[Puzzle, tuple[tuple[float, float, float], ...]] = {
         (0.000, 0.000, 0.050),
         (0.000, 0.000, 0.000),
     ),
+    Puzzle.D: _rod_d_vertices(),
 }
 
 

@@ -299,7 +299,7 @@ def test_path_starts_at_the_sync_point_beyond_the_free_end():
 
 
 @pytest.mark.parametrize(
-    "puzzle", [Puzzle.A1, Puzzle.B, Puzzle.C], ids=lambda p: p.value
+    "puzzle", [Puzzle.A1, Puzzle.B, Puzzle.C, Puzzle.D], ids=lambda p: p.value
 )
 def test_path_ends_at_the_stop_height_above_the_plate_center(puzzle):
     hoop_poses = make_planner(puzzle).update(0.0, 0)
@@ -312,7 +312,7 @@ def test_path_ends_at_the_stop_height_above_the_plate_center(puzzle):
 
 
 @pytest.mark.parametrize(
-    "puzzle", [Puzzle.A1, Puzzle.B, Puzzle.C], ids=lambda p: p.value
+    "puzzle", [Puzzle.A1, Puzzle.B, Puzzle.C, Puzzle.D], ids=lambda p: p.value
 )
 def test_points_on_the_rod_are_at_most_one_step_apart(puzzle):
     hoop_poses = make_planner(puzzle).update(0.0, 0)
@@ -321,6 +321,29 @@ def test_points_on_the_rod_are_at_most_one_step_apart(puzzle):
     distances = np.linalg.norm(np.diff(on_rod, axis=0), axis=1)
 
     assert distances.max() <= PATH_STEP + 1e-12
+
+
+def test_rod_d_sync_point_is_before_the_horizontal_free_tip():
+    hoop_poses = make_planner(Puzzle.D).update(0.0, 0)
+
+    np.testing.assert_allclose(
+        position(hoop_poses[0]),
+        (PLATE_CENTER[0] + 0.185, PLATE_CENTER[1], PLATE_HEIGHT + 0.155),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(hoop_axis(hoop_poses[0]), (-1.0, 0.0, 0.0))
+    np.testing.assert_allclose(handle(hoop_poses[0]), (0.0, 1.0, 0.0))
+
+
+def test_rod_d_handle_rotates_with_plate_without_flipping():
+    target_time = 4.0
+    plate_heading = TURNING_TABLE.predict(target_time).heading
+    hoop_poses = make_planner(Puzzle.D, TURNING_TABLE).update(target_time, 0)
+    expected_handle = (-math.sin(plate_heading), math.cos(plate_heading), 0.0)
+
+    for hoop_pose in hoop_poses:
+        np.testing.assert_allclose(handle(hoop_pose), expected_handle, atol=1e-12)
+        assert float(handle(hoop_pose) @ hoop_axis(hoop_pose)) == pytest.approx(0.0, abs=1e-12)
 
 
 def test_hoop_axis_points_along_a_straight_rod_toward_the_plate():
@@ -390,7 +413,7 @@ def test_poses_follow_the_plate_predicted_for_the_target_time():
 
 @settings(max_examples=25, deadline=None)
 @given(
-    puzzle=st.sampled_from([Puzzle.A1, Puzzle.B, Puzzle.C]),
+    puzzle=st.sampled_from([Puzzle.A1, Puzzle.B, Puzzle.C, Puzzle.D]),
     target_time=st.floats(-30.0, 30.0),
 )
 def test_hoop_poses_are_rotations(puzzle, target_time):

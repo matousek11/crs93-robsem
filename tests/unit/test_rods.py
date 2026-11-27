@@ -13,17 +13,25 @@ ROD_B_SLOPE = (-math.sqrt(0.5), 0.0, -math.sqrt(0.5))
 
 
 @pytest.mark.parametrize(
-    "puzzle", [Puzzle.A1, Puzzle.A2, Puzzle.B, Puzzle.C], ids=lambda p: p.value
+    ("puzzle", "top_height"),
+    [
+        (Puzzle.A1, 0.2),
+        (Puzzle.A2, 0.2),
+        (Puzzle.B, 0.2),
+        (Puzzle.C, 0.2),
+        (Puzzle.D, 0.155),
+    ],
+    ids=["A1", "A2", "B", "C", "D"],
 )
-def test_rod_runs_from_its_free_end_to_the_plate_center(puzzle):
+def test_rod_runs_from_its_free_end_to_the_plate_center(puzzle, top_height):
     points, _ = rod_centerline(puzzle, STEP)
 
-    assert points[0][2] == pytest.approx(0.2)
+    assert points[0][2] == pytest.approx(top_height)
     np.testing.assert_allclose(points[-1], (0.0, 0.0, 0.0), atol=1e-12)
 
 
 @pytest.mark.parametrize(
-    "puzzle", [Puzzle.A1, Puzzle.B, Puzzle.C], ids=lambda p: p.value
+    "puzzle", [Puzzle.A1, Puzzle.B, Puzzle.C, Puzzle.D], ids=lambda p: p.value
 )
 def test_neighbouring_points_are_at_most_one_step_apart(puzzle):
     points, _ = rod_centerline(puzzle, STEP)
@@ -54,9 +62,29 @@ def test_tangent_in_a_bend_follows_the_outgoing_segment():
     np.testing.assert_allclose(tangents[bend_index], ROD_B_SLOPE, atol=1e-12)
 
 
-def test_rod_without_a_model_raises():
-    with pytest.raises(NotImplementedError, match="D"):
-        rod_centerline(Puzzle.D, STEP)
+def test_rod_d_has_horizontal_tip_and_a_quarter_circle():
+    points, tangents = rod_centerline(Puzzle.D, STEP)
+    np.testing.assert_allclose(points[0], (0.085, 0.0, 0.155), atol=1e-12)
+    np.testing.assert_allclose(tangents[0], (-1.0, 0.0, 0.0), atol=1e-12)
+
+    center = np.array((0.035, 0.0, 0.105))
+    arc_points = points[(points[:, 0] <= 0.035) & (points[:, 2] >= 0.105)]
+    radii = np.linalg.norm(arc_points - center, axis=1)
+    assert np.max(np.abs(radii - 0.050)) < 0.00005
+
+
+def test_rod_d_tangents_turn_smoothly_from_horizontal_to_down():
+    points, tangents = rod_centerline(Puzzle.D, STEP)
+    midpoint = np.array(
+        (0.035 - 0.050 / math.sqrt(2), 0.0, 0.105 + 0.050 / math.sqrt(2))
+    )
+    midpoint_index = int(np.argmin(np.linalg.norm(points - midpoint, axis=1)))
+    np.testing.assert_allclose(
+        tangents[midpoint_index],
+        (-math.sqrt(0.5), 0.0, -math.sqrt(0.5)),
+        atol=0.035,
+    )
+    assert np.max(tangents[:, 2]) <= 1e-12
 
 
 @pytest.mark.parametrize(

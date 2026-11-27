@@ -35,7 +35,7 @@ Camera gives 1920 x 1200 images at 10 fps (23 MB/s).
 
 1. **Calibration.** Robot moves the hoop to at least 4 positions just above the plate, we detect hoop center in the image and compute homography from image to robot base frame. Plate height is known, so with the rod model we get the full 3D pose of the rod.
 2. **Table motion estimation.** Before the robot moves, we observe the ArUco marks and estimate center of rotation, angular velocity (its sign gives direction) and phase.
-3. **Trajectory.** From the rod model we compute its centerline from a synchronization point 10 cm above the free end down to 3.5 cm above the plate, hoop axis follows the rod direction.
+3. **Trajectory.** From the rod model we compute its centerline from a synchronization point 10 cm outward along the free end tangent down to 3.5 cm above the plate, hoop axis follows the rod direction.
 4. **Tracking.** Robot follows the trajectory in short `move_to_q` steps towards the rod pose predicted for the end of each step.
 5. **Occlusion.** When the arm shadows the ArUco marks, we rely on the prediction. Whenever at least one mark is visible, we refine the estimate.
 
